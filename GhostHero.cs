@@ -21,6 +21,7 @@ namespace DeadCellsMultiplayerMod
 
         public KingSkin king = null!;
         private ModEntry modEntry = null!;
+        private MultiplayerUI UI { get; set; } = null!;
 
 
         public GhostHero(dc.pr.Game game, Hero me, ILogger logger, ModEntry entry)
@@ -48,6 +49,7 @@ namespace DeadCellsMultiplayerMod
                 miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
             }
             SetLabel(king, GameMenu.RemoteUsername);
+            this.UI = new MultiplayerUI(modEntry);
             return king;
         }
 
@@ -103,7 +105,7 @@ namespace DeadCellsMultiplayerMod
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;
-            if (text == null) text="Guest";
+            if (text == null) text = "Guest";
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);
             text_h2d.y -= 80;
