@@ -33,6 +33,7 @@ namespace DeadCellsMultiplayerMod
             isCustom = false;
             mode = false;
             Seed = lvl;
+            ModEntry._companionKing = null;
             var net = GameMenu.NetRef;
             if (net != null && net.IsHost)
             {

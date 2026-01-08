@@ -493,7 +493,6 @@ public sealed class NetNode : IDisposable
             return;
         }
         SendRaw($"HP|{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
-        _log.Debug($"Sent HP|{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
     }
 
     public void SendLevelId(string levelId)
