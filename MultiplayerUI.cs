@@ -27,6 +27,7 @@ public class MultiplayerUI
 
     public FlowBox box { get; set; } = null!;
     public Hero hero = ModCore.Modules.Game.Instance.HeroInstance!;
+    private bool newgame = true;
     public MultiplayerUI(ModEntry Entry)
     {
         mod = Entry;
@@ -46,15 +47,21 @@ public class MultiplayerUI
         initkingLife(self);
 
     }
-
+    private bool initlif = true;
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)
     {
         orig(self);
+        if (initlif) this.kingLife.init(100, 100);
+        initlif = false;
         var king = ModEntry._companionKing;
         if (king == null) return;
         _net = ModEntry._net;
         var net = _net;
         if (net == null) return;
+        if (self.life <= 0)
+        {
+            king.destroy();
+        }
 
         if (lastLife != self.life || lastMaxLife != self.maxLife)
         {
@@ -64,7 +71,15 @@ public class MultiplayerUI
         }
         if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
             return;
-        kingLifeUpdate(king, life, maxLife, lif, bonusLife, recover);
+        kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
+        if (this.kingLife.curState.life < 0)
+        {
+            if (newgame)
+            {
+                self.startDeathCine();
+                newgame = false;
+            }
+        }
     }
 
     private void Hook_HUD_initLeftFlowT(Hook_HUD.orig_initLeftFlowT orig, HUD self)
@@ -72,6 +87,7 @@ public class MultiplayerUI
         orig(self);
         this.toplib = self.topRightFlowT;
         dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
+        kingLifeBar.init(100, 100);
         this.kingLife = kingLifeBar;
     }
 
