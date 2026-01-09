@@ -90,23 +90,14 @@ namespace DeadCellsMultiplayerMod
             gds = new GameDataSync(Logger);
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
-            Logger.Debug("[NetMod] Hook_mygameinit attached");
             Hook_Hero.wakeup += hook_hero_wakeup;
-            Logger.Debug("[NetMod] Hook_Hero.wakeup attached");
             Hook_Hero.onLevelChanged += hook_level_changed;
-            Logger.Debug("[NetMod] Hook_Hero.onLevelChanged attached");
             Hook_User.newGame += GameDataSync.user_hook_new_game;
-            Logger.Debug("[NetMod] Hook_User.newGame attached");
             Hook_LevelGen.generate += GameDataSync.hook_generate;
-            Logger.Debug("[NetMod] Hook_LevelGen.generate attached");
             Hook_AnimManager.play += Hook_AnimManager_play;
-            Logger.Debug("[NetMod] Hook_AnimManager.play attached");
             Hook_MiniMap.track += Hook_MiniMap_track;
-            Logger.Debug("[NetMod] Hook_MiniMap.track attached");
             Hook_KingSkin.initGfx += Hook_KingSkin_initgfx;
-            Logger.Debug("[NetMod] Hook_KingSkin.initGfx attached");
             Hook__LevelStruct.get += Hook__LevelStruct_get;
-            Logger.Debug("[NetMod] Hook__LevelStruct.get attached");
             this.UI = new MultiplayerUI(this);
             this.UI.init();
         }

@@ -60,7 +60,7 @@ namespace DeadCellsMultiplayerMod
                 LoadConfig();
                 Hook_TitleScreen.addMenu += AddMenuHook;
                 Hook_TitleScreen.mainMenu += MainMenuHook;
-                Hook_Game.onDispose += GameDisposeHook;
+                // Hook_Game.onDispose += GameDisposeHook;
                 _menuHooksAttached = true;
             }
             catch (Exception ex)
@@ -351,7 +351,6 @@ namespace DeadCellsMultiplayerMod
 
                 var items = GetMemberValue(self, "menuItems", true);
                 var count = GetArrayLength(items);
-                // Default main menu: after the first item (Play) length becomes 1
                 if (count == 1)
                 {
                     int white = 0xFFFFFF;
@@ -556,19 +555,19 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void GameDisposeHook(Hook_Game.orig_onDispose orig, Game self)
-        {
-            try
-            {
-                HandleWorldExit(isDisposeHook: true);
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] onDispose hook error: {Message}", ex.Message);
-            }
+        // private static void GameDisposeHook(Hook_Game.orig_onDispose orig, Game self)
+        // {
+        //     try
+        //     {
+        //         HandleWorldExit(isDisposeHook: true);
+        //     }
+        //     catch (Exception ex)
+        //     {
+        //         _log?.Warning("[NetMod] onDispose hook error: {Message}", ex.Message);
+        //     }
 
-            orig(self);
-        }
+        //     orig(self);
+        // }
 
         private static void HandleWorldExit(bool isDisposeHook = false)
         {

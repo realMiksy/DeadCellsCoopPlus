@@ -47,8 +47,10 @@ namespace DeadCellsMultiplayerMod
                     var history = self.mainGame.serverStats.history;
                     var Custom = self.mainGame.serverStats.isCustom;
                     var meta = self.mainGame.serverStats.meta;
+                    _log.Debug("succsesfully");
                 }
                 catch { }
+
                 net.SendSeed(Seed);
             }
             else if (net != null)
