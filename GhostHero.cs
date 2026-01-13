@@ -6,6 +6,8 @@ using dc;
 using HaxeProxy.Runtime;
 using dc.shader;
 using dc.hl.types;
+using Hashlink.Virtuals;
+using dc.libs.heaps.slib;
 
 
 namespace DeadCellsMultiplayerMod
@@ -68,8 +70,12 @@ namespace DeadCellsMultiplayerMod
             return king;
         }
 
+        private bool stopanim = false;
         public void disposeKing(KingSkin k)
         {
+            //level.entities.removeDyn(k);
+            Log.Debug("开始销毁幽灵");
+            stopanim = true;
             if (k.spr != null)
             {
                 ColorMap shader = (ColorMap)k.spr.getShader(ColorMap.Class);
@@ -81,10 +87,42 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
+            if (k.spriteClones != null)
+            {
+                int num = 0;
+                ArrayObj arrayObj = k.spriteClones;
+                for (; ; )
+                {
+                    int length = arrayObj.length;
+                    if (num >= length)
+                    {
+                        break;
+                    }
+                    length = arrayObj.length;
+                    virtual_e_followHead_notActualClone_offX_offY_scaleBonus_? virtual_e_followHead_notActualClone_offX_offY_scaleBonus_;
+                    if (num >= length)
+                    {
+                        virtual_e_followHead_notActualClone_offX_offY_scaleBonus_ = null;
+                    }
+                    else
+                    {
+                        virtual_e_followHead_notActualClone_offX_offY_scaleBonus_ = (virtual_e_followHead_notActualClone_offX_offY_scaleBonus_)arrayObj.array[num]!;
+                    }
+                    num++;
+                    HSprite hsprite = virtual_e_followHead_notActualClone_offX_offY_scaleBonus_!.e;
+                    if (hsprite != null)
+                    {
+                        if (hsprite.parent != null)
+                        {
+                            hsprite.parent.removeChild(hsprite);
+                        }
+                    }
+                }
+            }
+
             if (k.speechSfxDeck != null)
             {
                 k.speechSfxDeck.clear();
-
             }
 
             if (k.runAnims != null)
@@ -106,6 +144,7 @@ namespace DeadCellsMultiplayerMod
         {
             if (king == null || king.spr == null || king.spr._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
+            if (stopanim == true) return;
             var animManager = king.spr._animManager;
 
             try
@@ -134,7 +173,6 @@ namespace DeadCellsMultiplayerMod
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;
-            if (entity.spr == null) return;
             if (text == null) text = "Guest";
             _Assets _Assets = Assets.Class;
             dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), true, entity.spr);

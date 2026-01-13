@@ -20,6 +20,8 @@ using dc.tool;
 using dc.hxd;
 using System.Timers;
 using HaxeProxy.Runtime;
+using dc.en.mob;
+using dc.haxe;
 
 
 namespace DeadCellsMultiplayerMod
@@ -114,7 +116,6 @@ namespace DeadCellsMultiplayerMod
             _ghost.disposeKing(_companionKing);
         }
 
-
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
         {
             orig(self, mobsPerRooms);
@@ -166,7 +167,6 @@ namespace DeadCellsMultiplayerMod
             orig(self);
             dc.String group = "idle".AsHaxeString();
             SpriteLib heroLib = Assets.Class.getHeroLib(Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()));
-            self.spr.lib = heroLib;
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             self.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
@@ -237,6 +237,7 @@ namespace DeadCellsMultiplayerMod
                 _companionKing.disposeGfx();
                 _companionKing = _ghost.CreateGhostKing(me._level);
             }
+
         }
 
 
@@ -274,6 +275,12 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
+            if (Key.Class.isPressed(37))
+            {
+                var hero = ModCore.Modules.Game.Instance.HeroInstance!;
+                Zombie zombie = new Zombie(hero._level, hero.cx, hero.cy, 0, 100);
+                zombie.init();
+            }
             if (_companionKing == null || me == null || _ghost == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
