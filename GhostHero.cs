@@ -131,8 +131,9 @@ namespace DeadCellsMultiplayerMod
             }
             k.removeAllLights(true);
             k.disposeGfx();
-            k.dispose();
             k.destroy();
+            k.dispose();
+
         }
 
         public void TeleportByPixels(double x, double y)

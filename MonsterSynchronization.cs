@@ -1,18 +1,11 @@
 using dc;
 using dc.en;
-using dc.en.mob;
 using dc.h2d;
 using dc.hl.types;
-using dc.hxd;
-using dc.tool;
 using dc.ui.hud;
 using DeadCellsMultiplayerMod;
-using HaxeProxy.Runtime;
-using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Modules;
-using Serilog;
-using System.Collections.Generic;
-using System.Linq; // 如果需要使用LINQ，但这里暂时不需要
+
 
 namespace MobsSynchronization
 {
@@ -40,7 +33,6 @@ namespace MobsSynchronization
     bool arg5, dc.h2d.Object arg6, dc.ui.hud.map.Text arg7)
         {
             orig(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
-            return;
             if (Std.Class.@is(arg2, Mob.Class))
             {
                 string typeName = arg2.GetType().ToString();

@@ -146,7 +146,7 @@ public class MultiplayerUI
         k.curState.recover = (double)recover;
     }
     private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
-    private const int MAX_TEXTS = 30;
+    private const int MAX_TEXTS = 10;
 
     public void DebugUI(string @string)
     {

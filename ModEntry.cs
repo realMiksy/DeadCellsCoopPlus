@@ -105,16 +105,9 @@ namespace DeadCellsMultiplayerMod
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
 
-            //Hook_LevelGen.genMobs += Hook_LevelGen_genmobs;
-            //Hook_MobsGen.addElites += Hook_MobsGen_addElites;
-            Hook_Hero.disposeGfx += Hook_Hero_dispose;
+
         }
 
-        private void Hook_Hero_dispose(Hook_Hero.orig_disposeGfx orig, Hero self)
-        {
-            orig(self);
-            _ghost.disposeKing(_companionKing);
-        }
 
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
         {
