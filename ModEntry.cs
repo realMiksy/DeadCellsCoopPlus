@@ -335,7 +335,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (_netRole == NetRole.None) return;
             var net = _net;
-            var animManager = me?.spr?._animManager;
             if (net == null || string.IsNullOrWhiteSpace(anim)) return;
             if (!force &&
                 string.Equals(_lastAnimSent, anim, StringComparison.Ordinal) &&

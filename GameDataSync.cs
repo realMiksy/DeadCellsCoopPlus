@@ -31,7 +31,6 @@ namespace DeadCellsMultiplayerMod
         bool mode,
         LaunchMode gdata)
         {
-            _log.Error("user_hook_new_game");
             isCustom = false;
             mode = false;
             Seed = lvl;

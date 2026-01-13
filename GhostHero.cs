@@ -57,21 +57,6 @@ namespace DeadCellsMultiplayerMod
             return king;
         }
 
-
-        public KingSkin reInitKing(Level level)
-        {
-            king.set_level(level);
-            king.initGfx();
-            king.visible = true;
-            var miniMap = ModEntry.miniMap;
-            if (miniMap != null && _me._level.map == king._level.map)
-            {
-                miniMap.track(king, 14888237, "minimapHero".AsHaxeString(), null, true, null, null, null);
-            }
-            SetLabel(king, GameMenu.RemoteUsername);
-            return king;
-        }
-
         public void TeleportByPixels(double x, double y)
         {
             king?.setPosPixel(x, y - 0.2d);
