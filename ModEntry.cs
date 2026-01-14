@@ -91,6 +91,7 @@ namespace DeadCellsMultiplayerMod
             Instance = this;
             this.gds = new GameDataSync(Logger);
             this.UI = new MultiplayerUI(this);
+            this.UI.init();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
             GameMenu.Initialize(Logger);
             Hook_Game.init += Hook_gameinit;
