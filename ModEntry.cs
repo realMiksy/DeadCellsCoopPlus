@@ -218,22 +218,25 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
-            var localId = _net?.id ?? -1;
-            if (_ghost == null) _ghost = new GhostHero(localId, game!, me, Logger, this);
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (_ghost == null)
+                _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
-
-            if (_companionKing == null)
+            for (int i = 0; i < clients.Length; i++)
             {
-                _companionKing = _ghost.CreateGhostKing(me._level);
+                var client = clients[i];
+                if (client != null)
+                {
+                    client.destroy();
+                    client.dispose();
+                    client.disposeGfx();
+                }
+                clients[i] = _ghost.CreateGhostKing(me._level);
+                rLastX[i] = 0;
+                rLastY[i] = 0;
             }
-            else
-            {
-                _companionKing.destroy();
-                _companionKing.dispose();
-                _companionKing.disposeGfx();
-                _companionKing = _ghost.CreateGhostKing(me._level);
-            }
-
+            _companionKing = clients.Length > 0 ? clients[0] : null;
         }
 
 
@@ -271,10 +274,9 @@ namespace DeadCellsMultiplayerMod
         };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
-            if (_companionKing == null || me == null || _ghost == null) return;
+            if (me == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
-            _ghost?.HandleRemoteAnim(_net);
             if (_lastAnimSent != null && _loopAnimations.Contains(_lastAnimSent))
             {
                 ResendCurrentAnim(dt);
@@ -306,7 +308,7 @@ namespace DeadCellsMultiplayerMod
             float distSq = dx * dx + dy * dy;
 
             if (distSq < 4.0f) return;
-            if (_net == null || me == null || _companionKing == null) return;
+            if (_net == null || me == null) return;
             if (me.spr.x == last_x && me.spr.y == last_y) return;
 
             _net.TickSend(me.spr.x, me.spr.y);
@@ -314,26 +316,73 @@ namespace DeadCellsMultiplayerMod
             last_y = me.spr.y;
         }
 
+        public static double[] rLastX = new double[3];
+        public static double[] rLastY = new double[3];
 
-        public static double rLastX = 0, rLastY = 0;
+        private static bool TryGetClientIndex(int localId, int remoteId, out int index)
+        {
+            index = -1;
+            if (localId <= 0 || remoteId <= 0 || remoteId == localId)
+                return false;
+
+            var mapped = remoteId < localId ? remoteId - 1 : remoteId - 2;
+            if (mapped < 0 || mapped >= clients.Length)
+                return false;
+
+            index = mapped;
+            return true;
+        }
 
         private void ReceiveGhostCoords()
         {
             var net = _net;
             var ghost = _ghost;
-            if (net == null || ghost == null || me == null || _ghost == null || _companionKing == null) return;
+            if (net == null || me == null || ghost == null) return;
 
-            if (net.TryGetRemote(out var remoteId, out var rx, out var ry))
+            if (!net.TryConsumeRemoteSnapshot(out var remotes))
+                return;
+
+            var localId = net.id;
+            foreach (var remote in remotes)
             {
-                remotePlayerId = remoteId;
-                ghost.TeleportByPixels(rx, ry);
-                if (rx < rLastX)
-                    _companionKing.dir = -1;
-                if (rx > rLastX)
-                    _companionKing.dir = 1;
-                rLastX = rx;
-                rLastY = ry;
+                if (!TryGetClientIndex(localId, remote.Id, out var index))
+                    continue;
+
+                var client = clients[index];
+                if (client == null)
+                {
+                    clients[index] = ghost.CreateGhostKing(me._level);
+                    client = clients[index];
+                }
+                if (client == null)
+                    continue;
+
+                remotePlayerId = remote.Id;
+                client.setPosPixel(remote.X, remote.Y - 0.2d);
+                if (remote.X < rLastX[index])
+                    client.dir = -1;
+                if (remote.X > rLastX[index])
+                    client.dir = 1;
+                rLastX[index] = remote.X;
+                rLastY[index] = remote.Y;
+
+                if (remote.HasAnim && !string.IsNullOrWhiteSpace(remote.Anim))
+                    PlayGhostAnim(client, remote.Anim!, remote.AnimQueue, remote.AnimG);
             }
+        }
+
+        private void PlayGhostAnim(KingSkin client, string anim, int? queueAnim, bool? g)
+        {
+            if (client?.spr?._animManager == null) return;
+            if (string.IsNullOrWhiteSpace(anim)) return;
+            var animManager = client.spr._animManager;
+            try
+            {
+                animManager.stopWithoutStateAnims(anim.AsHaxeString(), queueAnim);
+                animManager.setFrame(0);
+            }
+            catch { }
+            animManager.play(anim.AsHaxeString(), queueAnim, g);
         }
 
         private void SendHeroAnim(string anim, int? queueAnim, bool? g, bool force = false)

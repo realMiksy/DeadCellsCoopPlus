@@ -5,6 +5,7 @@ using System.IO;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using dc.pr;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -36,6 +37,8 @@ namespace DeadCellsMultiplayerMod
         private static bool _pendingAutoStart;
         private static bool _levelDescArrived;
         private static bool _autoStartTriggered;
+        private static DateTime _autoStartRetryAt = DateTime.MinValue;
+        private const string AutoStartMutexName = "DeadCellsMultiplayerMod.AutoStart";
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
         private static bool _worldExitHandled;
@@ -288,6 +291,9 @@ namespace DeadCellsMultiplayerMod
 
         public static void TickMenu(double dt)
         {
+            if (DateTime.UtcNow < _autoStartRetryAt)
+                return;
+
             bool shouldStart = false;
 
             lock (Sync)
@@ -311,8 +317,50 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    ts.startNewGame(custom: true);
+                    Mutex? mutex = null;
+                    bool hasHandle = false;
+                    try
+                    {
+                        mutex = new Mutex(false, AutoStartMutexName);
+                        try
+                        {
+                            hasHandle = mutex.WaitOne(0);
+                        }
+                        catch (AbandonedMutexException)
+                        {
+                            hasHandle = true;
+                        }
+
+                        if (!hasHandle)
+                        {
+                            lock (Sync)
+                            {
+                                _autoStartTriggered = false;
+                                _pendingAutoStart = true;
+                            }
+                            _autoStartRetryAt = DateTime.UtcNow.AddMilliseconds(250);
+                            return;
+                        }
+
+                        ts.startNewGame(custom: true);
+                    }
+                    finally
+                    {
+                        if (hasHandle)
+                            mutex?.ReleaseMutex();
+                        mutex?.Dispose();
+                    }
                     _log?.Information("[NetMod] Auto-started new game after seed");
+                }
+                catch (IOException ioEx)
+                {
+                    _log?.Warning("[NetMod] Auto-start blocked by config lock: {Message}", ioEx.Message);
+                    lock (Sync)
+                    {
+                        _autoStartTriggered = false;
+                        _pendingAutoStart = true;
+                    }
+                    _autoStartRetryAt = DateTime.UtcNow.AddSeconds(1.5);
                 }
                 catch (Exception ex)
                 {

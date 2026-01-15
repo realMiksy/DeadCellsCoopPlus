@@ -65,6 +65,28 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    public readonly struct RemoteSnapshot
+    {
+        public readonly int Id;
+        public readonly double X;
+        public readonly double Y;
+        public readonly string? Anim;
+        public readonly int? AnimQueue;
+        public readonly bool? AnimG;
+        public readonly bool HasAnim;
+
+        public RemoteSnapshot(int id, double x, double y, string? anim, int? animQueue, bool? animG, bool hasAnim)
+        {
+            Id = id;
+            X = x;
+            Y = y;
+            Anim = anim;
+            AnimQueue = animQueue;
+            AnimG = animG;
+            HasAnim = hasAnim;
+        }
+    }
+
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
@@ -1028,6 +1050,37 @@ public sealed class NetNode : IDisposable
             rx = 0;
             ry = 0;
             return false;
+        }
+    }
+
+    public bool TryConsumeRemoteSnapshot(out List<RemoteSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteSnapshot>(_remotes.Count);
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+
+                var hasAnim = state.HasAnim;
+                var anim = hasAnim ? state.Anim : null;
+                var animQueue = hasAnim ? state.AnimQueue : null;
+                var animG = hasAnim ? state.AnimG : null;
+
+                snapshot.Add(new RemoteSnapshot(state.Id, state.X, state.Y, anim, animQueue, animG, hasAnim));
+
+                if (hasAnim)
+                    state.HasAnim = false;
+            }
+
+            return snapshot.Count > 0;
         }
     }
 
