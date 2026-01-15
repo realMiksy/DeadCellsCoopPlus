@@ -17,9 +17,131 @@ public sealed class NetNode : IDisposable
     private readonly ILogger _log;
     private readonly NetRole _role;
 
+    private sealed class ClientConnection : IDisposable
+    {
+        public TcpClient Client { get; }
+        public NetworkStream Stream { get; }
+        public SemaphoreSlim SendLock { get; } = new(1, 1);
+        public int AssignedId { get; }
+        public EndPoint? RemoteEndPoint => Client.Client?.RemoteEndPoint;
+
+        public ClientConnection(TcpClient client, int assignedId)
+        {
+            Client = client;
+            Stream = client.GetStream();
+            AssignedId = assignedId;
+        }
+
+        public void Dispose()
+        {
+            try { Stream.Close(); } catch { }
+            try { Client.Close(); } catch { }
+            try { SendLock.Dispose(); } catch { }
+        }
+    }
+
+    private sealed class RemoteState
+    {
+        public int Id { get; }
+        public double X;
+        public double Y;
+        public bool HasRemote;
+        public string? LevelId;
+        public string? Anim;
+        public int? AnimQueue;
+        public bool? AnimG;
+        public bool HasAnim;
+        public int Life;
+        public int MaxLife;
+        public int Lif;
+        public int BonusLife;
+        public int Recover;
+        public string? Username;
+        public string? Skin;
+
+        public RemoteState(int id)
+        {
+            Id = id;
+        }
+    }
+
+    public readonly struct RemoteSnapshot
+    {
+        public readonly int Id;
+        public readonly double X;
+        public readonly double Y;
+        public readonly string? Anim;
+        public readonly int? AnimQueue;
+        public readonly bool? AnimG;
+        public readonly bool HasAnim;
+        public readonly string? Username;
+
+        public RemoteSnapshot(int id, double x, double y, string? anim, int? animQueue, bool? animG, bool hasAnim, string? username)
+        {
+            Id = id;
+            X = x;
+            Y = y;
+            Anim = anim;
+            AnimQueue = animQueue;
+            AnimG = animG;
+            HasAnim = hasAnim;
+            Username = username;
+        }
+    }
+
+    public readonly struct RemoteHpSnapshot
+    {
+        public readonly int Id;
+        public readonly int Life;
+        public readonly int MaxLife;
+        public readonly int Lif;
+        public readonly int BonusLife;
+        public readonly int Recover;
+        public readonly string? Username;
+
+        public RemoteHpSnapshot(int id, int life, int maxLife, int lif, int bonusLife, int recover, string? username)
+        {
+            Id = id;
+            Life = life;
+            MaxLife = maxLife;
+            Lif = lif;
+            BonusLife = bonusLife;
+            Recover = recover;
+            Username = username;
+        }
+    }
+
     private TcpListener? _listener;   // host
-    private TcpClient?   _client;     // client OR accepted
+    private TcpClient? _client;     // client
     private NetworkStream? _stream;
+
+    private int ID;
+
+    public int id => ID;
+
+    private static readonly int[] ClientIds = { 2, 3, 4 };
+    public static int MaxClientSlots => ClientIds.Length;
+    public int ConnectedClientCount
+    {
+        get
+        {
+            if (_role == NetRole.Host)
+            {
+                lock (_clientsLock)
+                    return _clients.Count;
+            }
+            if (_role == NetRole.Client)
+                return HasRemote ? 1 : 0;
+            return 0;
+        }
+    }
+
+    private static readonly HashSet<int> UsedClientIds = new();
+
+    private readonly object _clientsLock = new();
+    private readonly Dictionary<int, ClientConnection> _clients = new();
+    private readonly Dictionary<int, RemoteState> _remotes = new();
+    private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
     private readonly IPEndPoint _destEp;   // client connect
@@ -31,21 +153,19 @@ public sealed class NetNode : IDisposable
     private bool _disposed;
 
     private readonly object _sync = new();
-    private double _rx, _ry;
     private bool _hasRemote;
-    private string? _remoteLevelId;
-    private string? _remoteAnim;
-    private int? _remoteAnimQueue;
-    private bool? _remoteAnimG;
-    private bool _hasRemoteAnim;
 
-    private int _remoteLife;
-    private int _remoteMaxLife;
-    private int _remoteLif;
-    private int _remoteBonusLife;
-    private int _remoteRecover;
-
-    public bool HasRemote { get { lock (_sync) return _hasRemote; } }
+    public bool HasRemote
+    {
+        get
+        {
+            if (_role == NetRole.Host)
+            {
+                lock (_clientsLock) return _clients.Count > 0;
+            }
+            lock (_sync) return _hasRemote;
+        }
+    }
     public bool IsAlive =>
         (_role == NetRole.Host && _listener != null) ||
         (_role == NetRole.Client && _client   != null);
@@ -64,24 +184,25 @@ public sealed class NetNode : IDisposable
 
         if (role == NetRole.Host)
         {
-            // только loopback
             _bindEp = ep;
             _destEp = new IPEndPoint(IPAddress.None, 0);
             StartHost();
+            ID = 1;
         }
         else
         {
-            _destEp = ep; // 127.0.0.1:XXXX из server.txt
+            _destEp = ep;
             _bindEp = new IPEndPoint(IPAddress.None, 0);
             StartClient();
+            ID = 0;
         }
     }
 
     // ================= HOST =================
     private void StartHost()
     {
-        try
-        {
+        // try
+        // {
             _cts = new CancellationTokenSource();
             _listener = new TcpListener(_bindEp);
             _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
@@ -92,13 +213,13 @@ public sealed class NetNode : IDisposable
             _log.Information("[NetNode] Host started OK. Bound to {0}:{1}", lep.Address, lep.Port);
 
             _acceptTask = Task.Run(() => AcceptLoop(_cts.Token));
-        }
-        catch (Exception ex)
-        {
-            _log.Error("[NetNode] Host start failed: {msg}", ex.Message);
-            Dispose();
-            throw;
-        }
+        // }
+        // catch (Exception ex)
+        // {
+        //     _log.Error("[NetNode] Host start failed: {msg}", ex.Message);
+        //     Dispose();
+        //     throw;
+        // }
     }
 
     private async Task AcceptLoop(CancellationToken ct)
@@ -108,23 +229,55 @@ public sealed class NetNode : IDisposable
             while (!ct.IsCancellationRequested && _listener != null)
             {
                 var tcp = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-                tcp.NoDelay = true;
-                _client = tcp;
-                _stream = tcp.GetStream();
-
-                _log.Information("[NetNode] Host accepted {ep}", tcp.Client.RemoteEndPoint);
-
-                await SendLineSafe("WELCOME\n").ConfigureAwait(false);
-                if (_role == NetRole.Host && GameMenu.TryGetHostRunSeed(out var hostSeed))
+                if (ct.IsCancellationRequested)
                 {
-                    SendSeed(hostSeed);
+                    try { tcp.Close(); } catch { }
+                    break;
                 }
 
-                lock (_sync) _hasRemote = true;
-                GameMenu.NotifyRemoteConnected(_role);
+                int assignedId;
+                lock (UsedClientIds)
+                {
+                    assignedId = ClientIds.FirstOrDefault(id => !UsedClientIds.Contains(id));
+                    if (assignedId == 0)
+                    {
+                        _log.Warning("[NetNode] Max players reached, kicking client");
+                        try { tcp.Close(); } catch { }
+                        continue;
+                    }
+                    UsedClientIds.Add(assignedId);
+                }
+                tcp.NoDelay = true;
+                var connection = new ClientConnection(tcp, assignedId);
+                lock (_clientsLock)
+                {
+                    _clients[assignedId] = connection;
+                }
+                lock (_sync)
+                {
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = assignedId;
+                    _hasRemote = true;
+                }
 
-                _recvTask = Task.Run(() => RecvLoop(ct));
-                break;
+                _log.Information("[NetNode] Host accepted {ep}", connection.RemoteEndPoint);
+
+                await SendLineToClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
+                if (_role == NetRole.Host && GameMenu.TryGetHostRunSeed(out var hostSeed))
+                {
+                    await SendLineToClientSafe(connection, $"SEED|{hostSeed}\n").ConfigureAwait(false);
+                }
+
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    GameMenu.NetRef = this;
+                    GameMenu.SetRole(_role);
+                    GameMenu.NotifyRemoteConnected(_role);
+                });
+                await SendLineToClientSafe(connection, $"ID|{assignedId}\n").ConfigureAwait(false);
+                await SendKnownUsersToClientSafe(connection).ConfigureAwait(false);
+
+                _ = Task.Run(() => RecvLoop(connection.Stream, ct, assignedId, connection));
             }
         }
         catch (OperationCanceledException) { }
@@ -164,10 +317,20 @@ public sealed class NetNode : IDisposable
 
                 await SendLineSafe("HELLO\n").ConfigureAwait(false);
 
-                lock (_sync) _hasRemote = true;
-                GameMenu.NotifyRemoteConnected(_role);
+                lock (_sync)
+                {
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = 1;
+                }
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    GameMenu.NetRef = this;
+                    GameMenu.SetRole(_role);
+                    GameMenu.NotifyRemoteConnected(_role);
+                });
 
-                _recvTask = Task.Run(() => RecvLoop(ct));
+                _recvTask = Task.Run(() => RecvLoop(_stream!, ct, 1, null));
                 return;
             }
             catch (OperationCanceledException) { break; }
@@ -180,18 +343,15 @@ public sealed class NetNode : IDisposable
     }
 
     // ============== COMMON IO ==============
-    private async Task RecvLoop(CancellationToken ct)
+    private async Task RecvLoop(NetworkStream stream, CancellationToken ct, int? senderId, ClientConnection? sender)
     {
         var buf = new byte[2048];
-        var sb  = new StringBuilder();
+        var sb = new StringBuilder();
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                var stream = _stream;
-                if (stream == null) break;
-
                 int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
                 if (n <= 0) break;
 
@@ -207,160 +367,14 @@ public sealed class NetNode : IDisposable
                     sb.Remove(0, idx + 1);
                     if (line.Length == 0) continue;
 
-
-                    if (line.StartsWith("WELCOME"))
+                    if (!HandleLine(line, senderId, out var forwardLine))
                     {
-                        lock (_sync) _hasRemote = true;
-                        continue;
+                        return;
                     }
 
-                    if (line.StartsWith("HELLO"))
+                    if (_role == NetRole.Host && sender != null && forwardLine != null)
                     {
-                        lock (_sync) _hasRemote = true;
-                        continue;
-                    }
-
-                    if (line.StartsWith("SEED|"))
-                    {
-                        var partsSeed = line.Split('|');
-                        if (partsSeed.Length >= 2 && int.TryParse(partsSeed[1], out var hostSeed))
-                        {
-                            lock (_sync) _hasRemote = true;
-                            GameMenu.ReceiveHostRunSeed(hostSeed);
-                            _log.Information("[NetNode] Received host run seed {Seed}", hostSeed);
-                        }
-                        else
-                        {
-                            _log.Warning("[NetNode] Malformed SEED line: \"{line}\"");
-                        }
-                        continue;
-                    }
-
-                    if (line.StartsWith("RUNPARAMS|"))
-                    {
-                        var payload = line["RUNPARAMS|".Length..];
-                        lock (_sync) _hasRemote = true;
-                        GameMenu.ReceiveRunParams(payload);
-                        continue;
-                    }
-
-                    if (line.StartsWith("USER|"))
-                    {
-                        var payload = line["USER|".Length..];
-                        lock (_sync) _hasRemote = true;
-                        GameMenu.ReceiveRemoteUsername(payload);
-                        continue;
-                    }
-
-                    if (line.StartsWith("LDESC|"))
-                    {
-                        var payload = line["LDESC|".Length..];
-                        lock (_sync) _hasRemote = true;
-                        GameMenu.ReceiveLevelDesc(payload);
-                        continue;
-                    }
-
-                    if (line.StartsWith("SKIN|", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var payload = line["SKIN|".Length..];
-                        lock (_sync) _hasRemote = true;
-                        try
-                        {
-                            GameDataSync.ReceiveHeroSkin(payload);
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
-                        }
-                        continue;
-                    }
-
-                    if (line.StartsWith("GEN|"))
-                    {
-                        var payload = line["GEN|".Length..];
-                        lock (_sync) _hasRemote = true;
-                        GameMenu.ReceiveGeneratePayload(payload);
-                        continue;
-                    }
-
-                    if (line.StartsWith("LEVEL|", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var payload = line[(line.IndexOf('|') + 1)..];
-                        lock (_sync)
-                        {
-                            _hasRemote = true;
-                            _remoteLevelId = payload;
-                        }
-                        continue;
-                    }
-
-                    if (line.StartsWith("ANIM|", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var payload = line[(line.IndexOf('|') + 1)..];
-                        var partsAnim = payload.Split('|');
-                        string animName = partsAnim.Length >= 1 ? partsAnim[0] : string.Empty;
-                        int? q = null;
-                        bool? gFlag = null;
-                        if (partsAnim.Length >= 2 && int.TryParse(partsAnim[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedQ))
-                            q = parsedQ;
-                        if (partsAnim.Length >= 3 && TryParseBool(partsAnim[2], out var parsedBool))
-                            gFlag = parsedBool;
-                        lock (_sync)
-                        {
-                            _hasRemote = true;
-                            _remoteAnim = animName;
-                            _remoteAnimQueue = q;
-                            _remoteAnimG = gFlag;
-                            _hasRemoteAnim = true;
-                        }
-                        continue;
-                    }
-
-                    if (line.StartsWith("HP|", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var payload = line[(line.IndexOf('|') + 1)..];
-                        var partsHealth = payload.Split('|');
-                        int life = 0;
-                        int maxLife = 0;
-                        int lif = 0;
-                        int bonusLife = 0;
-                        int recover = 0;
-                        if (partsHealth.Length >= 1 && int.TryParse(partsHealth[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLife))
-                            life = parsedLife;
-                        if (partsHealth.Length >= 2 && int.TryParse(partsHealth[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxLife))
-                            maxLife = parsedMaxLife;
-                        if (partsHealth.Length >= 3 && int.TryParse(partsHealth[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLif))
-                            lif = parsedLif;
-                        if (partsHealth.Length >= 4 && int.TryParse(partsHealth[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBonusLife))
-                            bonusLife = parsedBonusLife;
-                        if (partsHealth.Length >= 5 && int.TryParse(partsHealth[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRecover))
-                            recover = parsedRecover;
-                        lock (_sync)
-                        {
-                            _remoteLife = life;
-                            _remoteMaxLife = maxLife;
-                            _remoteLif = lif;
-                            _remoteBonusLife = bonusLife;
-                            _remoteRecover = recover;
-                        }
-                        continue;
-                    }
-
-                    if (line.StartsWith("KICK"))
-                    {
-                        GameMenu.NotifyRemoteDisconnected(_role);
-                        break;
-                    }
-
-                    var parts = line.Split('|');
-                    if (parts.Length == 2 &&
-                        double.TryParse(parts[0], out var cx) &&
-                        double.TryParse(parts[1], out var cy))
-                    {
-                        lock (_sync)
-                        {
-                            _rx = cx; _ry = cy; _hasRemote = true;
-                        }
+                        ForwardLineToOtherClients(sender, forwardLine);
                     }
                 }
             }
@@ -369,33 +383,563 @@ public sealed class NetNode : IDisposable
         catch (ObjectDisposedException) { }
         catch (Exception ex)
         {
-                _log.Warning("[NetNode] RecvLoop error: {msg}", ex.Message);
+            _log.Warning("[NetNode] RecvLoop error: {msg}", ex.Message);
         }
         finally
         {
-            lock (_sync)
+            if (_role == NetRole.Host && sender != null)
             {
-                _hasRemote = false;
-                _remoteLevelId = null;
-                _remoteAnim = null;
-                _remoteAnimQueue = null;
-                _remoteAnimG = null;
-                _hasRemoteAnim = false;
+                CleanupHostClient(sender);
             }
-            GameMenu.NotifyRemoteDisconnected(_role);
+            else
+            {
+                CleanupClient();
+            }
         }
     }
 
-    private async Task SendLineSafe(string line)
+    private bool HandleLine(string line, int? senderId, out string? forwardLine)
     {
-        var stream = _stream;
-        if (stream == null) return;
+        forwardLine = null;
+        var forceSenderId = _role == NetRole.Host && senderId.HasValue;
+
+        if (line.StartsWith("ID|"))
+        {
+            var part = line["ID|".Length..];
+            if (int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
+            {
+                ID = parsedId;
+                _log.Information("[NetNode] Assigned ID {Id}", ID);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("WELCOME"))
+        {
+            lock (_sync) _hasRemote = true;
+            return true;
+        }
+
+        if (line.StartsWith("HELLO"))
+        {
+            lock (_sync) _hasRemote = true;
+            return true;
+        }
+
+        if (line.StartsWith("SEED|"))
+        {
+            var partsSeed = line.Split('|');
+            if (partsSeed.Length >= 2 && int.TryParse(partsSeed[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var hostSeed))
+            {
+                lock (_sync) _hasRemote = true;
+                GameMenu.ReceiveHostRunSeed(hostSeed);
+                _log.Information("[NetNode] Received host run seed {Seed}", hostSeed);
+            }
+            else
+            {
+                _log.Warning("[NetNode] Malformed SEED line: \"{line}\"");
+            }
+            return true;
+        }
+
+        if (line.StartsWith("RUNPARAMS|"))
+        {
+            var payload = line["RUNPARAMS|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameMenu.ReceiveRunParams(payload);
+            return true;
+        }
+
+        if (line.StartsWith("USER|"))
+        {
+            var payload = line["USER|".Length..];
+            var effectiveId = ResolvePayloadId(payload, senderId, out var username);
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                int primaryId;
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.Username = username;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                    primaryId = _primaryRemoteId;
+                }
+
+                if (effectiveId.Value == primaryId)
+                    GameMenu.ReceiveRemoteUsername(username);
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildTaggedLine("USER", effectiveId.Value, username);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("LDESC|"))
+        {
+            var payload = line["LDESC|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameMenu.ReceiveLevelDesc(payload);
+            return true;
+        }
+
+        if (line.StartsWith("SKIN|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["SKIN|".Length..];
+            var effectiveId = ResolvePayloadId(payload, senderId, out var skin);
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                int primaryId;
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.Skin = skin;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                    primaryId = _primaryRemoteId;
+                }
+
+                if (effectiveId.Value == primaryId)
+                {
+                    try
+                    {
+                        GameDataSync.ReceiveHeroSkin(skin);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Warning("[NetNode] Failed to handle hero skin: {msg}", ex.Message);
+                    }
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildTaggedLine("SKIN", effectiveId.Value, skin);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("GEN|"))
+        {
+            var payload = line["GEN|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameMenu.ReceiveGeneratePayload(payload);
+            return true;
+        }
+
+        if (line.StartsWith("LEVEL|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["LEVEL|".Length..];
+            var partsLevel = payload.Split(new[] { '|' }, 2);
+            int? parsedId = null;
+            string levelValue = payload;
+            if (partsLevel.Length >= 2)
+            {
+                levelValue = partsLevel[1];
+                if (int.TryParse(partsLevel[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLevelRemoteId))
+                {
+                    parsedId = parsedLevelRemoteId;
+                }
+            }
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.LevelId = levelValue;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildTaggedLine("LEVEL", effectiveId.Value, levelValue);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("ANIM|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line[(line.IndexOf('|') + 1)..];
+            ParseAnimPayload(payload, out var parsedId, out var animName, out var q, out var gFlag);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.Anim = animName;
+                    state.AnimQueue = q;
+                    state.AnimG = gFlag;
+                    state.HasAnim = true;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildAnimLine(effectiveId.Value, animName, q, gFlag);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("HP|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line[(line.IndexOf('|') + 1)..];
+            ParseHpPayload(payload, out var parsedId, out var life, out var maxLife, out var lif, out var bonusLife, out var recover);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.Life = life;
+                    state.MaxLife = maxLife;
+                    state.Lif = lif;
+                    state.BonusLife = bonusLife;
+                    state.Recover = recover;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildHpLine(effectiveId.Value, life, maxLife, lif, bonusLife, recover);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("KICK"))
+        {
+            return false;
+        }
+
+        if (TryParsePositionLine(line, senderId, out var remoteId, out var cx, out var cy))
+        {
+            if (forceSenderId && senderId.HasValue)
+                remoteId = senderId.Value;
+            lock (_sync)
+            {
+                var state = GetOrCreateRemoteLocked(remoteId);
+                state.X = cx;
+                state.Y = cy;
+                state.HasRemote = true;
+                _hasRemote = true;
+                if (_primaryRemoteId == 0)
+                    _primaryRemoteId = remoteId;
+            }
+            if (_role == NetRole.Host && senderId.HasValue)
+                forwardLine = BuildPosLine(remoteId, cx, cy);
+        }
+
+        return true;
+    }
+
+    private void ForwardLineToOtherClients(ClientConnection sender, string line)
+    {
+        List<ClientConnection> snapshot;
+        lock (_clientsLock)
+        {
+            snapshot = _clients.Values.Where(c => c.AssignedId != sender.AssignedId).ToList();
+        }
+
+        foreach (var client in snapshot)
+        {
+            _ = SendLineToClientSafe(client, line);
+        }
+    }
+
+    private void CleanupHostClient(ClientConnection sender)
+    {
+        bool hasClients;
+        lock (_clientsLock)
+        {
+            _clients.Remove(sender.AssignedId);
+            hasClients = _clients.Count > 0;
+        }
+
+        sender.Dispose();
+
+        if (sender.AssignedId >= 2)
+        {
+            lock (UsedClientIds)
+            {
+                UsedClientIds.Remove(sender.AssignedId);
+            }
+        }
+
+        lock (_sync)
+        {
+            RemoveRemoteLocked(sender.AssignedId);
+            _hasRemote = hasClients;
+        }
+
+        if (!hasClients)
+        {
+            bool stillEmpty;
+            lock (_clientsLock)
+            {
+                stillEmpty = _clients.Count == 0;
+            }
+            if (stillEmpty)
+                GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
+        }
+    }
+
+    private void CleanupClient()
+    {
+        lock (_sync)
+        {
+            _hasRemote = false;
+            _remotes.Clear();
+            _primaryRemoteId = 0;
+        }
+        CloseClientConnection();
+        GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
+    }
+
+    private RemoteState GetOrCreateRemoteLocked(int id)
+    {
+        if (!_remotes.TryGetValue(id, out var state))
+        {
+            state = new RemoteState(id);
+            _remotes[id] = state;
+        }
+        return state;
+    }
+
+    private void RemoveRemoteLocked(int id)
+    {
+        _remotes.Remove(id);
+        if (_primaryRemoteId == id)
+        {
+            _primaryRemoteId = 0;
+            foreach (var key in _remotes.Keys)
+            {
+                if (_primaryRemoteId == 0 || key < _primaryRemoteId)
+                    _primaryRemoteId = key;
+            }
+        }
+    }
+
+    private static int? ResolvePayloadId(string payload, int? senderId, out string cleanedPayload)
+    {
+        cleanedPayload = payload;
+        var parts = payload.Split(new[] { '|' }, 2);
+        if (parts.Length == 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
+        {
+            cleanedPayload = parts[1];
+            return parsedId;
+        }
+        return senderId;
+    }
+
+    private static void ParseAnimPayload(string payload, out int? parsedId, out string animName, out int? queue, out bool? gFlag)
+    {
+        parsedId = null;
+        animName = string.Empty;
+        queue = null;
+        gFlag = null;
+
+        var parts = payload.Split('|');
+        var startIndex = 0;
+        if (parts.Length >= 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var idValue))
+        {
+            parsedId = idValue;
+            startIndex = 1;
+        }
+
+        if (parts.Length > startIndex)
+            animName = parts[startIndex];
+
+        if (parts.Length > startIndex + 1 &&
+            int.TryParse(parts[startIndex + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedQ))
+            queue = parsedQ;
+
+        if (parts.Length > startIndex + 2 && TryParseBool(parts[startIndex + 2], out var parsedBool))
+            gFlag = parsedBool;
+    }
+
+    private static void ParseHpPayload(string payload, out int? parsedId, out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
+    {
+        parsedId = null;
+        life = 0;
+        maxLife = 0;
+        lif = 0;
+        bonusLife = 0;
+        recover = 0;
+
+        var parts = payload.Split('|');
+        var startIndex = 0;
+        if (parts.Length >= 6 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var idValue))
+        {
+            parsedId = idValue;
+            startIndex = 1;
+        }
+
+        if (parts.Length > startIndex &&
+            int.TryParse(parts[startIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLife))
+            life = parsedLife;
+        if (parts.Length > startIndex + 1 &&
+            int.TryParse(parts[startIndex + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMaxLife))
+            maxLife = parsedMaxLife;
+        if (parts.Length > startIndex + 2 &&
+            int.TryParse(parts[startIndex + 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLif))
+            lif = parsedLif;
+        if (parts.Length > startIndex + 3 &&
+            int.TryParse(parts[startIndex + 3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBonusLife))
+            bonusLife = parsedBonusLife;
+        if (parts.Length > startIndex + 4 &&
+            int.TryParse(parts[startIndex + 4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRecover))
+            recover = parsedRecover;
+    }
+
+    private static bool TryParsePositionLine(string line, int? senderId, out int remoteId, out double rx, out double ry)
+    {
+        remoteId = 0;
+        rx = 0;
+        ry = 0;
+
+        var parts = line.Split('|');
+        if (parts.Length >= 3 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRemoteId) &&
+            double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var cx) &&
+            double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var cy))
+        {
+            remoteId = parsedRemoteId;
+            rx = cx;
+            ry = cy;
+            return true;
+        }
+
+        if (parts.Length == 2 &&
+            double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var cxFallback) &&
+            double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var cyFallback) &&
+            senderId.HasValue)
+        {
+            remoteId = senderId.Value;
+            rx = cxFallback;
+            ry = cyFallback;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildTaggedLine(string tag, int id, string payload)
+    {
+        return $"{tag}|{id}|{payload}\n";
+    }
+
+    private static string BuildAnimLine(int id, string animName, int? queue, bool? gFlag)
+    {
+        var queuePart = queue.HasValue ? queue.Value.ToString(CultureInfo.InvariantCulture) : string.Empty;
+        var gPart = gFlag.HasValue ? (gFlag.Value ? "1" : "0") : string.Empty;
+        return $"ANIM|{id}|{animName}|{queuePart}|{gPart}\n";
+    }
+
+    private static string BuildHpLine(int id, int life, int maxLife, int lif, int bonusLife, int recover)
+    {
+        return $"HP|{id}|{life}|{maxLife}|{lif}|{bonusLife}|{recover}\n";
+    }
+
+    private static string BuildPosLine(int id, double cx, double cy)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{id}|{cx}|{cy}\n");
+    }
+
+    private void CloseClientConnection()
+    {
+        try { _stream?.Close(); } catch { }
+        try { _client?.Close(); } catch { }
+        _stream = null;
+        _client = null;
+    }
+
+    private bool HasAnyConnection()
+    {
+        if (_role == NetRole.Host)
+        {
+            lock (_clientsLock) return _clients.Count > 0;
+        }
+        return _stream != null && _client != null && _client.Connected;
+    }
+
+    private Task SendLineSafe(string line)
+    {
+        if (_role == NetRole.Host)
+            return BroadcastLineSafe(line);
+
+        return SendLineToStreamSafe(_stream, _sendLock, line);
+    }
+
+    private Task SendLineToClientSafe(ClientConnection client, string line)
+    {
+        return SendLineToStreamSafe(client.Stream, client.SendLock, line);
+    }
+
+    private async Task BroadcastLineSafe(string line)
+    {
+        List<ClientConnection> snapshot;
+        lock (_clientsLock)
+        {
+            snapshot = _clients.Values.ToList();
+        }
+        if (snapshot.Count == 0) return;
+        var tasks = snapshot.Select(client => SendLineToClientSafe(client, line));
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    private async Task SendKnownUsersToClientSafe(ClientConnection connection)
+    {
+        List<RemoteState> snapshot;
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+                return;
+            snapshot = new List<RemoteState>(_remotes.Values);
+        }
+
+        foreach (var state in snapshot)
+        {
+            var username = state.Username;
+            if (string.IsNullOrWhiteSpace(username))
+                continue;
+            var line = BuildTaggedLine("USER", state.Id, username);
+            await SendLineToClientSafe(connection, line).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SendLineToStreamSafe(NetworkStream? stream, SemaphoreSlim? sendLock, string line)
+    {
+        if (stream == null || sendLock == null) return;
 
         var bytes = Encoding.UTF8.GetBytes(line);
         bool locked = false;
         try
         {
-            await _sendLock.WaitAsync().ConfigureAwait(false);
+            await sendLock.WaitAsync().ConfigureAwait(false);
             locked = true;
             await stream.WriteAsync(bytes.AsMemory(0, bytes.Length), CancellationToken.None).ConfigureAwait(false);
             await stream.FlushAsync().ConfigureAwait(false);
@@ -407,24 +951,23 @@ public sealed class NetNode : IDisposable
         }
         finally
         {
-            if (locked) _sendLock.Release();
+            if (locked) sendLock.Release();
         }
     }
 
     public void TickSend(double cx, double cy)
     {
-        if (_stream == null || _client == null || !_client.Connected) return;
-        var line = string.Create(
-            System.Globalization.CultureInfo.InvariantCulture,
-            $"{cx}|{cy}\n");
+        if (!HasAnyConnection()) return;
+        if (ID <= 0) return;
+        var line = BuildPosLine(ID, cx, cy);
         _ = SendLineSafe(line);
     }
 
-    public void LevelSend(string lvl) => SendLevelId(lvl);
+    public void LevelSend(int senderId, string lvl) => SendLevelId(senderId, lvl);
 
     public void SendSeed(int seed)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending seed {Seed}: no connected client", seed);
             return;
@@ -436,7 +979,7 @@ public sealed class NetNode : IDisposable
 
     public void SendUsername(string username)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending username: no connected client");
             return;
@@ -445,13 +988,14 @@ public sealed class NetNode : IDisposable
         var safe = (username ?? "guest").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
         if (safe.Length == 0) safe = "guest";
 
-        SendRaw("USER|" + safe);
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw("USER|" + idPart + safe);
         _log.Information("[NetNode] Sent username {Username}", safe);
     }
 
     public void SendRunParams(string json)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending run params: no connected client");
             return;
@@ -463,7 +1007,7 @@ public sealed class NetNode : IDisposable
 
     public void SendLevelDesc(string json)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending level desc: no connected client");
             return;
@@ -475,7 +1019,7 @@ public sealed class NetNode : IDisposable
 
     public void SendGeneratePayload(string json)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending generate payload: no connected client");
             return;
@@ -488,33 +1032,34 @@ public sealed class NetNode : IDisposable
 
     public void SendHP(double life, double maxLife, double lif, double bonusLife, double recover)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             return;
         }
-        SendRaw($"HP|{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw($"HP|{idPart}{life}|{maxLife}|{lif}|{bonusLife}|{recover}");
     }
 
-    public void SendLevelId(string levelId)
+    public void SendLevelId(int senderId, string levelId)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             return;
         }
 
         var safe = levelId.Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
-        SendRaw("LEVEL|" + safe);
+        SendRaw($"LEVEL|{senderId}|{safe}");
     }
 
     public void SendKick()
     {
-        if (_stream == null || _client == null || !_client.Connected) return;
+        if (!HasAnyConnection()) return;
         SendRaw("KICK");
     }
 
     public void SendAnim(string anim, int? queueAnim = null, bool? g = null)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             return;
         }
@@ -523,12 +1068,13 @@ public sealed class NetNode : IDisposable
         if (safe.Length == 0) safe = "idle";
         var queuePart = queueAnim.HasValue ? queueAnim.Value.ToString(CultureInfo.InvariantCulture) : string.Empty;
         var gPart = g.HasValue ? (g.Value ? "1" : "0") : string.Empty;
-        SendRaw($"ANIM|{safe}|{queuePart}|{gPart}");
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw($"ANIM|{idPart}{safe}|{queuePart}|{gPart}");
     }
 
     public void SendHeroSkin(string skin)
     {
-        if (_stream == null || _client == null || !_client.Connected)
+        if (!HasAnyConnection())
         {
             _log.Information("[NetNode] Skip sending hero skin: no connected client");
             return;
@@ -538,7 +1084,8 @@ public sealed class NetNode : IDisposable
         if (string.IsNullOrWhiteSpace(safe))
             safe = "PrisonerDefault";
 
-        SendRaw("SKIN|" + safe);
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw("SKIN|" + idPart + safe);
         _log.Information("[NetNode] Sent hero skin {Skin}", safe);
     }
 
@@ -548,12 +1095,75 @@ public sealed class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
-    public bool TryGetRemote(out double rx, out double ry)
+    public bool TryGetRemote(out int remoteId, out double rx, out double ry)
     {
         lock (_sync)
         {
-            rx = _rx; ry = _ry;
-            return _hasRemote;
+            if (_primaryRemoteId != 0 && _remotes.TryGetValue(_primaryRemoteId, out var state) && state.HasRemote)
+            {
+                remoteId = state.Id;
+                rx = state.X;
+                ry = state.Y;
+                return true;
+            }
+            remoteId = 0;
+            rx = 0;
+            ry = 0;
+            return false;
+        }
+    }
+
+    public bool TryConsumeRemoteSnapshot(out List<RemoteSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteSnapshot>(_remotes.Count);
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+
+                var hasAnim = state.HasAnim;
+                var anim = hasAnim ? state.Anim : null;
+                var animQueue = hasAnim ? state.AnimQueue : null;
+                var animG = hasAnim ? state.AnimG : null;
+
+                snapshot.Add(new RemoteSnapshot(state.Id, state.X, state.Y, anim, animQueue, animG, hasAnim, state.Username));
+
+                if (hasAnim)
+                    state.HasAnim = false;
+            }
+
+            return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryGetRemoteHpSnapshots(out List<RemoteHpSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteHpSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteHpSnapshot>(_remotes.Count);
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+
+                snapshot.Add(new RemoteHpSnapshot(state.Id, state.Life, state.MaxLife, state.Lif, state.BonusLife, state.Recover, state.Username));
+            }
+
+            return snapshot.Count > 0;
         }
     }
 
@@ -561,8 +1171,13 @@ public sealed class NetNode : IDisposable
     {
         lock (_sync)
         {
-            levelId = _remoteLevelId;
-            return _hasRemote && !string.IsNullOrEmpty(levelId);
+            if (_primaryRemoteId != 0 && _remotes.TryGetValue(_primaryRemoteId, out var state))
+            {
+                levelId = state.LevelId;
+                return state.HasRemote && !string.IsNullOrEmpty(levelId);
+            }
+            levelId = null;
+            return false;
         }
     }
 
@@ -570,12 +1185,21 @@ public sealed class NetNode : IDisposable
     {
         lock (_sync)
         {
-            life = _remoteLife;
-            maxLife = _remoteMaxLife;
-            lif = _remoteLif;
-            bonusLife = _remoteBonusLife;
-            recover = _remoteRecover;
-            return _hasRemote;
+            if (_primaryRemoteId != 0 && _remotes.TryGetValue(_primaryRemoteId, out var state))
+            {
+                life = state.Life;
+                maxLife = state.MaxLife;
+                lif = state.Lif;
+                bonusLife = state.BonusLife;
+                recover = state.Recover;
+                return state.HasRemote;
+            }
+            life = 0;
+            maxLife = 0;
+            lif = 0;
+            bonusLife = 0;
+            recover = 0;
+            return false;
         }
     }
 
@@ -583,16 +1207,25 @@ public sealed class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (!_hasRemoteAnim)
+            if (_primaryRemoteId != 0 && _remotes.TryGetValue(_primaryRemoteId, out var state))
             {
-                anim = null; queueAnim = null; g = null;
-                return false;
+                if (!state.HasAnim)
+                {
+                    anim = null;
+                    queueAnim = null;
+                    g = null;
+                    return false;
+                }
+                anim = state.Anim;
+                queueAnim = state.AnimQueue;
+                g = state.AnimG;
+                state.HasAnim = false;
+                return state.HasRemote && anim != null;
             }
-            anim = _remoteAnim;
-            queueAnim = _remoteAnimQueue;
-            g = _remoteAnimG;
-            _hasRemoteAnim = false;
-            return _hasRemote && anim != null;
+            anim = null;
+            queueAnim = null;
+            g = null;
+            return false;
         }
     }
 
@@ -617,10 +1250,33 @@ public sealed class NetNode : IDisposable
         if (_disposed) return;
         _disposed = true;
         try { _cts?.Cancel(); } catch { }
+        List<ClientConnection> clients;
+        lock (_clientsLock)
+        {
+            clients = _clients.Values.ToList();
+            _clients.Clear();
+        }
+        foreach (var client in clients)
+        {
+            try { client.Dispose(); } catch { }
+            if (client.AssignedId >= 2)
+            {
+                lock (UsedClientIds)
+                {
+                    UsedClientIds.Remove(client.AssignedId);
+                }
+            }
+        }
         try { _stream?.Close(); } catch { }
         try { _client?.Close(); } catch { }
         try { _listener?.Stop(); } catch { }
         GameDataSync.Seed = 0;
+        lock (_sync)
+        {
+            _remotes.Clear();
+            _primaryRemoteId = 0;
+            _hasRemote = false;
+        }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }
     }

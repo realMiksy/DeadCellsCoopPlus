@@ -75,11 +75,11 @@ namespace MobsSynchronization
                         displayText += $"|Nemesis: {nemesisType}";
                     }
 
-                    uI.DebugUI(displayText);
+                    // uI.DebugUI(displayText);
                 }
                 catch (Exception ex)
                 {
-                    uI.DebugUI($"Error getting mob info: {ex.Message}");
+                    // uI.DebugUI($"Error getting mob info: {ex.Message}");
                 }
             }
 
@@ -90,6 +90,7 @@ namespace MobsSynchronization
     bool arg5, dc.h2d.Object arg6, dc.ui.hud.map.Text arg7)
         {
             orig(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+            return;
             if (Std.Class.@is(arg2, Mob.Class))
             {
                 string typeName = arg2.GetType().ToString();

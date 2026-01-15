@@ -2,8 +2,10 @@ using System;
 using System.Net;
 using System.Reflection;
 using System.IO;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using dc.pr;
 using dc.ui;
 using HaxeProxy.Runtime;
@@ -24,6 +26,7 @@ namespace DeadCellsMultiplayerMod
         private static int? _remoteSeed;
         private const int MaxSeed = 999_999;
         public static NetNode? NetRef { get; set; }
+        private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
 
         private static bool _menuHooksAttached;
         private static WeakReference<TitleScreen?>? _titleScreenRef;
@@ -34,6 +37,8 @@ namespace DeadCellsMultiplayerMod
         private static bool _pendingAutoStart;
         private static bool _levelDescArrived;
         private static bool _autoStartTriggered;
+        private static DateTime _autoStartRetryAt = DateTime.MinValue;
+        private const string AutoStartMutexName = "DeadCellsMultiplayerMod.AutoStart";
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
         private static bool _worldExitHandled;
@@ -90,6 +95,27 @@ namespace DeadCellsMultiplayerMod
             InitializeMenuUiHooks();
         }
 
+        internal static void EnqueueMainThread(Action action)
+        {
+            if (action == null) return;
+            _mainThreadQueue.Enqueue(action);
+        }
+
+        internal static void ProcessMainThreadQueue()
+        {
+            while (_mainThreadQueue.TryDequeue(out var action))
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Main thread task failed: {Message}", ex.Message);
+                }
+            }
+        }
+
         public static void MarkInRun()
         {
             lock (Sync)
@@ -134,16 +160,46 @@ namespace DeadCellsMultiplayerMod
 
         public static void ReceiveHostRunSeed(int seed)
         {
+            bool shouldRestart = false;
+            int? previousSeed = null;
             lock (Sync)
             {
+                previousSeed = _remoteSeed;
                 _remoteSeed = seed;
-                if (_role == NetRole.Client && !_inActualRun)
+                if (_role == NetRole.Client)
                 {
-                    _seedArrived = true;
-                    _pendingAutoStart = true;
+                    if (_inActualRun)
+                    {
+                        if (previousSeed.HasValue && previousSeed.Value != seed)
+                            shouldRestart = true;
+                    }
+                    else
+                    {
+                        _seedArrived = true;
+                        _pendingAutoStart = true;
+                    }
                 }
             }
+            if (shouldRestart)
+                QueueClientNewGame(seed);
             _log?.Information("[NetMod] Client received host seed {Seed}", seed);
+        }
+
+        private static void QueueClientNewGame(int seed)
+        {
+            EnqueueMainThread(() =>
+            {
+                var game = ModEntry.Instance?.game;
+                if (game?.user == null)
+                {
+                    _log?.Warning("[NetMod] Skipping new game for seed {Seed}: game not ready", seed);
+                    return;
+                }
+
+                _log?.Information("[NetMod] Client restarting run for new seed {Seed}", seed);
+                ForceExitToMainMenu();
+                game.user.newGame(seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
+            });
         }
 
         public static bool TryGetRemoteSeed(out int seed)
@@ -265,6 +321,9 @@ namespace DeadCellsMultiplayerMod
 
         public static void TickMenu(double dt)
         {
+            if (DateTime.UtcNow < _autoStartRetryAt)
+                return;
+
             bool shouldStart = false;
 
             lock (Sync)
@@ -288,8 +347,50 @@ namespace DeadCellsMultiplayerMod
             {
                 try
                 {
-                    ts.startNewGame(custom: true);
+                    Mutex? mutex = null;
+                    bool hasHandle = false;
+                    try
+                    {
+                        mutex = new Mutex(false, AutoStartMutexName);
+                        try
+                        {
+                            hasHandle = mutex.WaitOne(0);
+                        }
+                        catch (AbandonedMutexException)
+                        {
+                            hasHandle = true;
+                        }
+
+                        if (!hasHandle)
+                        {
+                            lock (Sync)
+                            {
+                                _autoStartTriggered = false;
+                                _pendingAutoStart = true;
+                            }
+                            _autoStartRetryAt = DateTime.UtcNow.AddMilliseconds(250);
+                            return;
+                        }
+
+                        ts.startNewGame(custom: true);
+                    }
+                    finally
+                    {
+                        if (hasHandle)
+                            mutex?.ReleaseMutex();
+                        mutex?.Dispose();
+                    }
                     _log?.Information("[NetMod] Auto-started new game after seed");
+                }
+                catch (IOException ioEx)
+                {
+                    _log?.Warning("[NetMod] Auto-start blocked by config lock: {Message}", ioEx.Message);
+                    lock (Sync)
+                    {
+                        _autoStartTriggered = false;
+                        _pendingAutoStart = true;
+                    }
+                    _autoStartRetryAt = DateTime.UtcNow.AddSeconds(1.5);
                 }
                 catch (Exception ex)
                 {
@@ -381,7 +482,11 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
                 AddMenuButton(screen, "Host game", () => ShowConnectionMenu(screen, NetRole.Host), "Create a multiplayer session");
                 AddMenuButton(screen, "Join game", () => ShowConnectionMenu(screen, NetRole.Client), "Connect to an existing host");
-                AddMenuButton(screen, "Back", () => screen.mainMenu(), "Return to main menu");
+                AddMenuButton(screen, "Back", () =>
+                {
+                    StopNetworkFromMenu();
+                    screen.mainMenu();
+                }, "Return to main menu");
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
                 RemoveDuplicatesKeepFirst(screen, "Host game", "Join game");
                 _inHostStatusMenu = false;
@@ -519,8 +624,8 @@ namespace DeadCellsMultiplayerMod
 
         private static void StartHostServerOnly()
         {
-            try
-            {
+            // try
+            // {
                 if (ModEntry.Instance == null)
                 {
                     _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
@@ -535,11 +640,11 @@ namespace DeadCellsMultiplayerMod
 
                 ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
                 _waitingForHost = false;
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
-            }
+            // }
+            // catch (Exception ex)
+            // {
+            //     _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
+            // }
         }
 
         private static void StartHostRun(TitleScreen screen)
@@ -625,11 +730,13 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
 
                 AddInfoLine(screen, $"Status: {BuildStatus(NetRole.Host)}", infoColor: 0xA0C0FF);
-                AddInfoLine(screen, $"Players: {BuildPlayerList(NetRole.Host)}", infoColor: 0xA0C0FF);
+                AddInfoLine(screen, "Players:", infoColor: 0xA0C0FF);
+                AddPlayerLines(screen, NetRole.Host, infoColor: 0xA0C0FF);
 
                 AddMenuButton(screen, "Play", () => StartHostRun(screen), "Launch game");
                 AddMenuButton(screen, "Back", () =>
                 {
+                    StopNetworkFromMenu();
                     SetRole(NetRole.None);
                     _menuSelection = NetRole.None;
                     ShowMultiplayerMenu(screen);
@@ -682,16 +789,21 @@ namespace DeadCellsMultiplayerMod
 
         private static void DisconnectFromMenu(TitleScreen screen)
         {
-            try
-            {
-                ModEntry.Instance?.StopNetworkFromMenu();
-            }
-            catch { }
+            StopNetworkFromMenu();
             _waitingForHost = false;
             _menuSelection = NetRole.None;
             _inHostStatusMenu = false;
             _inClientWaitingMenu = false;
             screen.mainMenu();
+        }
+
+        private static void StopNetworkFromMenu()
+        {
+            try
+            {
+                ModEntry.Instance?.StopNetworkFromMenu();
+            }
+            catch { }
         }
 
         private static void EditUsername(TitleScreen screen)
@@ -737,7 +849,16 @@ namespace DeadCellsMultiplayerMod
         {
             if (role == NetRole.Host)
             {
-                ForceExitToMainMenu();
+                _remoteUsername = "guest";
+                _localReady = false;
+                _genArrived = false;
+                _seedArrived = false;
+                if (_menuSelection == NetRole.Host)
+                {
+                    var ts = GetTitleScreen();
+                    if (ts != null) ShowHostStatusMenu(ts);
+                }
+                return;
             }
 
             SetRole(NetRole.None);
@@ -1017,22 +1138,32 @@ namespace DeadCellsMultiplayerMod
             return "waiting for client";
         }
 
-        private static string BuildPlayerList(NetRole role)
+        private static List<string> BuildPlayerLines(NetRole role)
         {
             var parts = new System.Collections.Generic.List<string>();
-            parts.Add(role == NetRole.Host ? "Host (you)" : "Client (you)");
-
             var net = NetRef;
-            if (net != null && net.HasRemote)
+            if (role == NetRole.Host)
             {
-                parts.Add(role == NetRole.Host ? "Client joined" : "Host online");
+                parts.Add(_username);
+                if (net != null && net.HasRemote)
+                    parts.Add(_remoteUsername);
             }
             else
             {
-                parts.Add(role == NetRole.Host ? "No client connected" : "Waiting for host");
+                parts.Add(_username);
+                if (net != null && net.HasRemote)
+                    parts.Add(_remoteUsername);
             }
 
-            return string.Join(", ", parts);
+            return parts;
+        }
+
+        private static void AddPlayerLines(TitleScreen screen, NetRole role, int? infoColor = null)
+        {
+            foreach (var line in BuildPlayerLines(role))
+            {
+                AddInfoLine(screen, $"- {line}", infoColor: infoColor);
+            }
         }
 
         private static void OpenTextInput(TitleScreen screen, string title, string initial, Action<string> onValidate)

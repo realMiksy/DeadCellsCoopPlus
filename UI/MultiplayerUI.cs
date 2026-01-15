@@ -1,5 +1,7 @@
 
+using System;
 using System.Security.Cryptography;
+using System.Xml.Serialization;
 using dc;
 using dc.cine;
 using dc.en;
@@ -25,21 +27,41 @@ namespace DeadCellsMultiplayerMod;
 
 public class MultiplayerUI
 {
+    private sealed class LifeSlot
+    {
+        public int SlotIndex { get; }
+        public dc.ui.hud.LifeBar LifeBar { get; }
+        public FlowBox Container { get; }
+        public FlowBox LabelBox { get; }
+        public dc.h2d.Text? LabelText { get; set; }
+        public string? LastLabel { get; set; }
+
+        public LifeSlot(int slotIndex, dc.ui.hud.LifeBar lifeBar, FlowBox container, FlowBox labelBox)
+        {
+            SlotIndex = slotIndex;
+            LifeBar = lifeBar;
+            Container = container;
+            LabelBox = labelBox;
+        }
+    }
+
     private ModEntry mod { get; set; }
-    public dc.ui.hud.LifeBar kingLife { get; set; } = null!;
-    public dc.h2d.Flow toplib { get; set; } = null!;
+    private dc.h2d.Flow toplib { get; set; } = null!;
     public static dc.h2d.Flow flowContainer = null!;
     private static NetNode? _net;
+    public int SlotIndex { get; set; }
+
+    private LifeSlot?[] _slots = System.Array.Empty<LifeSlot?>();
+    private bool[] _slotActive = System.Array.Empty<bool>();
+    private HUD? _hud;
 
     private int lastLife = 0;
     private int lastMaxLife = 0;
-    private int kingmaxlife = 100;
 
-    public FlowBox box { get; set; } = null!;
-
-    public MultiplayerUI(ModEntry Entry)
+    public MultiplayerUI(ModEntry Entry, int slotIndex = 0)
     {
         mod = Entry;
+        SlotIndex = slotIndex;
     }
 
     public void init()
@@ -52,7 +74,11 @@ public class MultiplayerUI
     private void Hook_HUD_initking(Hook_HUD.orig_initHero orig, HUD self)
     {
         orig(self);
-        initkingLife(self);
+
+        _hud = self;
+        int slotCount = NetNode.MaxClientSlots;
+        _slots = new LifeSlot?[slotCount];
+        _slotActive = new bool[slotCount];
     }
     public bool CanUseJumpHit()
     {
@@ -107,14 +133,20 @@ public class MultiplayerUI
         }
 
     }
-    private bool initlif = true;
     private void Hook_Hero_kinglifupdate(Hook_Hero.orig_updateLifeBar orig, Hero self)
     {
         orig(self);
-        if (initlif) this.kingLife.init(100, 100);
-        initlif = false;
-        var king = ModEntry._companionKing;
-        if (king == null) return;
+        KingLifeUpdate(self);
+    }
+
+    private dc.libs.Process process()
+    {
+        bool? titleLib = null;
+        return new TitleScreen(titleLib);
+    }
+
+    public void KingLifeUpdate(Hero self)
+    {
         _net = ModEntry._net;
         var net = _net;
         if (net == null) return;
@@ -127,85 +159,177 @@ public class MultiplayerUI
             lastMaxLife = self.maxLife;
         }
 
-        if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
+        if (_slots.Length == 0)
             return;
 
-        kingLifeUpdate(king!, life, maxLife, lif, bonusLife, recover);
-        this.kingmaxlife = maxLife;
-        if (self.life <= 0)
+        if (!net.TryGetRemoteHpSnapshots(out var snapshots) || snapshots.Count == 0)
         {
-            life = -1;
+            ClearSlots();
+            return;
         }
-        if (this.kingLife.curState.life < 0 || self.life <= 0 || life < 0)
+
+        System.Array.Clear(_slotActive, 0, _slotActive.Length);
+        var localId = net.id;
+        foreach (var remote in snapshots)
         {
-            //self.startDeathCine();
-            GameMenu.Initialize(mod.Logger);
-            Main me = Main.Class.ME;
-            HlFunc<dc.libs.Process> pause = new HlFunc<dc.libs.Process>(this.process);
-            me.transition(null, pause, Ref<bool>.Null, null, null);
+            if (!ModEntry.TryGetClientIndex(localId, remote.Id, out var slotIndex))
+                continue;
+
+            if (slotIndex < 0 || slotIndex >= _slots.Length)
+                continue;
+
+            var slot = _slots[slotIndex];
+            if (slot == null)
+            {
+                var hud = _hud;
+                if (hud == null)
+                    continue;
+                var lifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), null);
+                slot = initkingLife(hud, slotIndex, lifeBar);
+                _slots[slotIndex] = slot;
+            }
+
+            var displayName = ModEntry.GetClientLabel(slotIndex);
+            if (string.IsNullOrWhiteSpace(displayName) ||
+                string.Equals(displayName, "Guest", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(displayName, GameMenu.RemoteUsername, StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(remote.Username))
+                    displayName = remote.Username.Trim();
+            }
+            if (string.IsNullOrWhiteSpace(displayName))
+                displayName = "Guest";
+            UpdateSlotLabel(slot, displayName);
+            UpdateLifeBar(slot.LifeBar, remote.Life, remote.MaxLife, remote.Lif, remote.BonusLife, remote.Recover);
+            _slotActive[slotIndex] = true;
         }
+
+        RemoveInactiveSlots();
     }
 
-    private dc.libs.Process process()
-    {
-        bool? titleLib = null;
-        return new TitleScreen(titleLib);
-    }
 
-
-
-    public void initkingLife(HUD self)
+    private LifeSlot initkingLife(HUD self, int slotIndex, dc.ui.hud.LifeBar kinglifeui)
     {
         this.toplib = self.topRightFlowT;
-        dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
+
+        var displayName = ModEntry.GetClientLabel(slotIndex);
+        dc.String remoteUsername = displayName.AsHaxeString();
         double wh = remoteUsername.length + 2;
-        double hh = 6;
+        double hh = 1.5;
         bool logo = true;
+
+        FlowBox flowBox = FlowBox.Class.createBoxValidation(null, Ref<double>.Null, Ref<double>.Null, Ref<bool>.Null, null);
+        flowBox.isVertical = false;
+        flowBox.box.alpha = 0;
+
+
+        flowBox.set_horizontalAlign(new FlowAlign.Middle());
+        flowBox.set_verticalAlign(new FlowAlign.Middle());
+
         FlowBox uibox = FlowBox.Class.createBoxValidation(null, Ref<double>.From(ref wh), Ref<double>.From(ref hh), Ref<bool>.From(ref logo), null);
-        this.box = uibox;
-
-        dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
+        dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("WO".AsHaxeString()), false, uibox);
         text_h2d.textColor = 16766720;
-        this.toplib.addChild(this.box);
 
-        dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
-        kingLifeBar.init(100, 100);
-        this.kingLife = kingLifeBar;
+        flowBox.addChild(kinglifeui);
+        flowBox.addChild(uibox);
 
+        this.toplib.addChild(flowBox);
+        this.toplib.isVertical = true;
         this.toplib.set_verticalAlign(new FlowAlign.Top());
         this.toplib.set_horizontalAlign(new FlowAlign.Right());
 
         var geth = Viewport.Class.NATIVE_HEIGHT;
         var getw = Viewport.Class.NATIVE_WIDTH;
-
         double pixelScale = self.get_pixelScale.Invoke();
 
         int rightMargin = (int)(5 * pixelScale);
         int topMargin = (int)(5 * pixelScale);
-
-
         int w = (int)(100 * pixelScale);
         int h = (int)(10 * pixelScale);
+        int labelHeight = (int)(hh * pixelScale);
+        int labelBarGap = (int)(2 * pixelScale);
+        int slotGap = (int)(6 * pixelScale);
 
-        int targetX = getw - w - rightMargin;
-        int targetY = topMargin;
+        kinglifeui.setSize(w, h);
+        kinglifeui.get_pixelScale = self.get_pixelScale;
+        kinglifeui.enableText();
 
-        this.box.x = targetX;
-        this.box.y = targetY;
+        int horizontalSpacing = (int)(5 * pixelScale);
 
-        this.kingLife.setSize(w, h);
-        this.kingLife.get_pixelScale = self.get_pixelScale;
-        this.kingLife.enableText();
+        //horizontalContainer.horizontalSpacing = horizontalSpacing;
+        var slot = new LifeSlot(slotIndex, kinglifeui, flowBox, uibox)
+        {
+            LabelText = text_h2d,
+            LastLabel = displayName
+        };
+        return slot;
     }
 
-    public void kingLifeUpdate(KingSkin king, int max, int maxLife, int lif, int bonusLife, int recover)
+    private static void UpdateSlotLabel(LifeSlot slot, string displayName)
     {
-        var k = this.kingLife;
-        k.init(max, maxLife);
-        k.curState.life = (double)lif;
-        k.curState.bonusLife = (double)bonusLife!;
-        k.curState.recover = (double)recover;
+        if (slot.LabelText != null && slot.LastLabel != displayName)
+        {
+            slot.LabelText.text = displayName.AsHaxeString();
+            slot.LastLabel = displayName;
+        }
     }
+
+    private static void UpdateLifeBar(dc.ui.hud.LifeBar lifeBar, int max, int maxLife, int lif, int bonusLife, int recover)
+    {
+        lifeBar.init(max, maxLife);
+        lifeBar.curState.life = (double)lif;
+        lifeBar.curState.bonusLife = (double)bonusLife;
+        lifeBar.curState.recover = (double)recover;
+    }
+
+    public void kingLifeUpdate(KingSkin king, dc.ui.hud.LifeBar kingLife, int max, int maxLife, int lif, int bonusLife, int recover)
+    {
+        UpdateLifeBar(kingLife, max, maxLife, lif, bonusLife, recover);
+    }
+
+    private void ClearSlots()
+    {
+        if (_slots.Length == 0)
+            return;
+
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            var slot = _slots[i];
+            if (slot == null)
+                continue;
+            try
+            {
+                toplib?.removeChild(slot.Container);
+                slot.Container.remove();
+            }
+            catch { }
+            _slots[i] = null;
+        }
+    }
+
+    private void RemoveInactiveSlots()
+    {
+        if (_slots.Length == 0)
+            return;
+
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            if (_slotActive[i])
+                continue;
+            var slot = _slots[i];
+            if (slot == null)
+                continue;
+            try
+            {
+                toplib?.removeChild(slot.Container);
+                slot.Container.remove();
+            }
+            catch { }
+            _slots[i] = null;
+        }
+    }
+
+
     private static Queue<dc.h2d.Text> textQueue = new Queue<dc.h2d.Text>();
     private const int MAX_TEXTS = 10;
 
