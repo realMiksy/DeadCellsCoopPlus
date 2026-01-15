@@ -110,7 +110,7 @@ namespace DeadCellsMultiplayerMod
         {
             Instance = this;
             this.gds = new GameDataSync(Logger);
-            this.UI = new MultiplayerUI(this);
+            this.UI = new MultiplayerUI(this, 0);
             this.UI.init();
             MobsSynchronization.MobsSynchronization mobs = new MobsSynchronization.MobsSynchronization(this);
             GameMenu.Initialize(Logger);

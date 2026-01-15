@@ -28,6 +28,9 @@ public class MultiplayerUI
     public dc.h2d.Flow toplib { get; set; } = null!;
     public static dc.h2d.Flow flowContainer = null!;
     private static NetNode? _net;
+    public int SlotIndex { get; set; }
+    private dc.h2d.Text? kingNameText;
+    private string? lastNameText;
 
     private int lastLife = 0;
     private int lastMaxLife = 0;
@@ -35,9 +38,10 @@ public class MultiplayerUI
 
     public FlowBox box { get; set; } = null!;
 
-    public MultiplayerUI(ModEntry Entry)
+    public MultiplayerUI(ModEntry Entry, int slotIndex = 0)
     {
         mod = Entry;
+        SlotIndex = slotIndex;
     }
 
     public void init()
@@ -111,6 +115,13 @@ public class MultiplayerUI
             lastMaxLife = self.maxLife;
         }
 
+        var displayName = ModEntry.GetClientLabel(SlotIndex);
+        if (kingNameText != null && lastNameText != displayName)
+        {
+            kingNameText.text = displayName.AsHaxeString();
+            lastNameText = displayName;
+        }
+
         if (!net.TryGetRemoteHP(out int life, out int maxLife, out int lif, out int bonusLife, out int recover))
             return;
 
@@ -141,7 +152,8 @@ public class MultiplayerUI
     public void initkingLife(HUD self)
     {
         this.toplib = self.topRightFlowT;
-        dc.String remoteUsername = GameMenu.RemoteUsername.AsHaxeString();
+        var displayName = ModEntry.GetClientLabel(SlotIndex);
+        dc.String remoteUsername = displayName.AsHaxeString();
         double wh = remoteUsername.length + 2;
         double hh = 6;
         bool logo = true;
@@ -150,6 +162,8 @@ public class MultiplayerUI
 
         dc.h2d.Text text_h2d = Assets.Class.makeText(remoteUsername, dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), false, this.box);
         text_h2d.textColor = 16766720;
+        kingNameText = text_h2d;
+        lastNameText = displayName;
         this.toplib.addChild(this.box);
 
         dc.ui.hud.LifeBar kingLifeBar = new dc.ui.hud.LifeBar(new LifeBarColorMode.Normal(), this.toplib);
@@ -171,8 +185,13 @@ public class MultiplayerUI
         int w = (int)(100 * pixelScale);
         int h = (int)(10 * pixelScale);
 
+        int labelHeight = (int)(hh * pixelScale);
+        int labelBarGap = (int)(2 * pixelScale);
+        int slotGap = (int)(6 * pixelScale);
+        int slotHeight = labelHeight + labelBarGap + h + slotGap;
+
         int targetX = getw - w - rightMargin;
-        int targetY = topMargin;
+        int targetY = topMargin + (System.Math.Max(0, SlotIndex) * slotHeight);
 
         this.box.x = targetX;
         this.box.y = targetY;
@@ -180,6 +199,8 @@ public class MultiplayerUI
         this.kingLife.setSize(w, h);
         this.kingLife.get_pixelScale = self.get_pixelScale;
         this.kingLife.enableText();
+        this.kingLife.x = targetX;
+        this.kingLife.y = targetY + labelHeight + labelBarGap;
     }
 
     public void kingLifeUpdate(KingSkin king, int max, int maxLife, int lif, int bonusLife, int recover)

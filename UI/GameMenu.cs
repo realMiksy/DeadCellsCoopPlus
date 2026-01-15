@@ -452,7 +452,11 @@ namespace DeadCellsMultiplayerMod
                 screen.clearMenu();
                 AddMenuButton(screen, "Host game", () => ShowConnectionMenu(screen, NetRole.Host), "Create a multiplayer session");
                 AddMenuButton(screen, "Join game", () => ShowConnectionMenu(screen, NetRole.Client), "Connect to an existing host");
-                AddMenuButton(screen, "Back", () => screen.mainMenu(), "Return to main menu");
+                AddMenuButton(screen, "Back", () =>
+                {
+                    StopNetworkFromMenu();
+                    screen.mainMenu();
+                }, "Return to main menu");
                 RemoveMenuItems(screen, "About Core Modding", "Play multiplayer");
                 RemoveDuplicatesKeepFirst(screen, "Host game", "Join game");
                 _inHostStatusMenu = false;
@@ -701,6 +705,7 @@ namespace DeadCellsMultiplayerMod
                 AddMenuButton(screen, "Play", () => StartHostRun(screen), "Launch game");
                 AddMenuButton(screen, "Back", () =>
                 {
+                    StopNetworkFromMenu();
                     SetRole(NetRole.None);
                     _menuSelection = NetRole.None;
                     ShowMultiplayerMenu(screen);
@@ -753,16 +758,21 @@ namespace DeadCellsMultiplayerMod
 
         private static void DisconnectFromMenu(TitleScreen screen)
         {
-            try
-            {
-                ModEntry.Instance?.StopNetworkFromMenu();
-            }
-            catch { }
+            StopNetworkFromMenu();
             _waitingForHost = false;
             _menuSelection = NetRole.None;
             _inHostStatusMenu = false;
             _inClientWaitingMenu = false;
             screen.mainMenu();
+        }
+
+        private static void StopNetworkFromMenu()
+        {
+            try
+            {
+                ModEntry.Instance?.StopNetworkFromMenu();
+            }
+            catch { }
         }
 
         private static void EditUsername(TitleScreen screen)

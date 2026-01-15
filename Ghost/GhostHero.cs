@@ -75,7 +75,6 @@ namespace DeadCellsMultiplayerMod
                 SetLabel(king, label);
             this.UI = new MultiplayerUI(modEntry);
             dynamic key = Data.Class.item.all.getDyn(278);
-            Log.Debug($"{key}");
             dynamic props = key.props;
             props.prct = 0;
             return king;
@@ -84,7 +83,6 @@ namespace DeadCellsMultiplayerMod
         private bool stopanim = false;
         public void disposeKing(KingSkin k)
         {
-            Log.Debug("开始销毁幽灵");
             stopanim = true;
             if (k.spr != null)
             {
