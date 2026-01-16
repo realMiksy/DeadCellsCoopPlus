@@ -9,6 +9,8 @@ using dc.hl.types;
 using Hashlink.Virtuals;
 using dc.libs.heaps.slib;
 using System.Collections.Generic;
+using dc.h2d;
+using dc.ui;
 
 
 namespace DeadCellsMultiplayerMod
@@ -31,6 +33,7 @@ namespace DeadCellsMultiplayerMod
         public KingSkin king = null!;
         private ModEntry modEntry = null!;
         private MultiplayerUI UI { get; set; } = null!;
+        public KingHead.Kinghead kinghead = null!;
 
 
         public GhostHero(
@@ -66,7 +69,28 @@ namespace DeadCellsMultiplayerMod
             king.canBeActivated(_me);
             king.needsLongPress = true;
             king.hasEntityTouchChecks = true;
-            bool sics = true;
+
+
+            bool sics = false;
+            this.kinghead = new KingHead.Kinghead(_me, king, level);
+            bool from = true;
+            this.kinghead.init(king._level, king.spr, Ref<bool>.From(ref from));
+
+            if (this.kinghead.customHeadSpr != null)
+            {
+                this.kinghead.customHeadSpr.blendMode = new BlendMode.Add();
+                this.kinghead.customHeadSpr.alpha = 1.0f;
+                this.kinghead.customHeadSpr.y -= 10;
+            }
+            if (this.kinghead.eye == null)
+            {
+                this.kinghead.heroHasHead = false;
+            }
+            this.kinghead.eye!.blendMode = new BlendMode.Add();
+            this.kinghead.eye!.alpha = 1.0f;
+            this.kinghead.heroHasHead = false;
+
+
             king.enableAllPhysics(Ref<bool>.From(ref sics));
             // king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
