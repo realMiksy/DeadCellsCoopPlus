@@ -74,6 +74,10 @@ namespace DeadCellsMultiplayerMod
 
         private string remoteSkin;
 
+        int _layer;
+
+        HeroHead head;
+
         internal static void SetRemoteSkin(string? skin)
         {
             var instance = Instance;
@@ -161,13 +165,6 @@ namespace DeadCellsMultiplayerMod
         {
             return;
         }
-
-        private void Hook_Hero_revealBlueprints(Hook_Hero.orig_revealBlueprints orig, Hero self)
-        {
-            Logger.Debug($"self.blueprints: {self.blueprints}");
-            orig(self);
-        }
-
 
 
         private void Hook_MobsGen_addElites(Hook_MobsGen.orig_addElites orig, MobsGen self, ArrayObj mobsPerRooms)
@@ -282,6 +279,7 @@ namespace DeadCellsMultiplayerMod
             if (_ghost == null)
                 _ghost = new GhostHero(localId, game!, me, Logger, this);
             _ghost.SetLabel(me, GameMenu.Username);
+
             for (int i = 0; i < clients.Length; i++)
             {
                 var client = clients[i];
@@ -304,7 +302,6 @@ namespace DeadCellsMultiplayerMod
         {
             me = self;
             orig(self, lvl, cx, cy);
-            Logger.Debug($"game.data.blueprints: {game.data.blueprints}");
         }
 
 

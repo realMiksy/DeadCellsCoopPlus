@@ -21,7 +21,7 @@ public class Ghosthead(Hero _me, KingSkin _kingSkin, Level level)
     public void init()
     {
         kinghd(king);
-        //KingHeadTile(lvl, Const.Class.DP_ROOM_MAIN_HERO);
+        KingHeadTile(lvl, Const.Class.DP_ROOM_MAIN_HERO);
     }
 
     public ParticlePool? Pool { get; set; }
