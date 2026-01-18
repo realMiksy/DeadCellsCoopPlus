@@ -31,6 +31,8 @@ using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.MultiplayerModUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
+using DeadCellsMultiplayerMod.MultiplayerModUI.ConnectionUI;
 
 
 namespace DeadCellsMultiplayerMod
@@ -151,6 +153,7 @@ namespace DeadCellsMultiplayerMod
             MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
             MobsSynchronization mobs = new MobsSynchronization(this);
             Minimapreveal minimapreveal = new Minimapreveal();
+            ConnectionUI connection = new ConnectionUI(this);
             GameMenu.Initialize(Logger);
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
         }

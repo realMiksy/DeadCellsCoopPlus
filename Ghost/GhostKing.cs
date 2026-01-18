@@ -3,17 +3,37 @@ using dc.en;
 using dc.h3d.mat;
 using dc.hl.types;
 using dc.libs.heaps.slib;
+using dc.pow;
 using dc.pr;
 using dc.shader;
 using dc.tool;
+using ModCore.Storage;
 using ModCore.Utitities;
 
 namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
-    public class GhostKing : KingSkin
+    public class GhostKing : KingSkin,
+    IHxbitSerializable<GhostKing.KingData>
     {
         public GhostKing(Level lvl, int x, int y) : base(lvl, x, y)
         {
+        }
+        private KingData kingData = new();
+        private class KingData
+        {
+            public GhostKing king = null!;
+        }
+
+
+        KingData IHxbitSerializable<KingData>.GetData()
+        {
+            this.kingData.king = this;
+            return kingData;
+        }
+
+        void IHxbitSerializable<KingData>.SetData(KingData data)
+        {
+
         }
 
 
@@ -59,5 +79,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         {
             base.onActivate(by, longPress);
         }
+
     }
 }

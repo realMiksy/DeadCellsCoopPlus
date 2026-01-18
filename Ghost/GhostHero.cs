@@ -13,6 +13,7 @@ using dc.h2d;
 using dc.ui;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI;
+using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 
 
 namespace DeadCellsMultiplayerMod
@@ -74,25 +75,6 @@ namespace DeadCellsMultiplayerMod
 
 
             bool sics = false;
-            this.kinghead = new KingHead.Kinghead(_me, king, level);
-            bool from = true;
-            this.kinghead.init(king._level, king.spr, Ref<bool>.From(ref from));
-
-            if (this.kinghead.customHeadSpr != null)
-            {
-                this.kinghead.customHeadSpr.blendMode = new BlendMode.Add();
-                this.kinghead.customHeadSpr.alpha = 1.0f;
-                this.kinghead.customHeadSpr.y -= 10;
-            }
-            if (this.kinghead.eye == null)
-            {
-                this.kinghead.heroHasHead = false;
-            }
-            this.kinghead.eye!.blendMode = new BlendMode.Add();
-            this.kinghead.eye!.alpha = 1.0f;
-            this.kinghead.heroHasHead = false;
-
-
             king.enableAllPhysics(Ref<bool>.From(ref sics));
             // king.setPosCase(Game.Class.ME.hero.cx, Game.Class.ME.hero.cy, Game.Class.ME.hero.xr, Game.Class.ME.hero.yr);
             king.visible = true;
