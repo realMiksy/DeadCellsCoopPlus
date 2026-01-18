@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Reflection;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,6 +16,7 @@ using Serilog;
 using ModCore.Utitities;
 using Microsoft.Win32;
 using Serilog.Core;
+using dc.cine;
 
 
 namespace DeadCellsMultiplayerMod
@@ -63,6 +65,37 @@ namespace DeadCellsMultiplayerMod
         private static bool _genArrived;
         private static LevelDescSync? _cachedLevelDescSync;
         private static RunParamsResolved? _latestResolvedRunParams;
+        private static readonly object TextInputSync = new();
+        private static WeakReference<TextInput?>? _activeTextInputRef;
+        private static bool _activeTextInputNoSpaces;
+        private const int KeyCtrl = 17;
+        private const int KeyLCtrl = 162;
+        private const int KeyRCtrl = 163;
+        private const int KeyC = 67;
+        private const int KeyV = 86;
+        // Win32 clipboard helpers for text input shortcuts.
+        private const uint CfUnicodeText = 13;
+        private const uint GmemMoveable = 0x0002;
+        [DllImport("user32.dll")]
+        private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+        [DllImport("user32.dll")]
+        private static extern bool CloseClipboard();
+        [DllImport("user32.dll")]
+        private static extern bool EmptyClipboard();
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetClipboardData(uint uFormat);
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+        [DllImport("user32.dll")]
+        private static extern bool IsClipboardFormatAvailable(uint format);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GlobalLock(IntPtr hMem);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GlobalUnlock(IntPtr hMem);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GlobalFree(IntPtr hMem);
 
         private static void InitializeMenuUiHooks()
         {
@@ -238,6 +271,7 @@ namespace DeadCellsMultiplayerMod
                 _log?.Information("[NetMod] Host restarting run ({Reason})", reason);
                 game.destroy();
                 game.disposeImmediately();
+                
                 game.user.newGame(GameDataSync.Seed, GameDataSync._isTwitch, GameDataSync._isCustom, GameDataSync._mode, GameDataSync._launch);
             });
         }
@@ -566,7 +600,7 @@ namespace DeadCellsMultiplayerMod
                         _mpIp = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value;
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
-                    });
+                    }, noSpaces: true);
                 }, "Edit IP");
 
                 AddMenuButton(screen, $"Port: {_mpPort}", () =>
@@ -578,7 +612,7 @@ namespace DeadCellsMultiplayerMod
                         _mpPort = parsed;
                         SaveConfig();
                         ShowConnectionMenu(screen, role);
-                    });
+                    }, noSpaces: true);
                 }, "Edit port");
 
                 var actionLabel = role == NetRole.Host ? "Host" : "Join";
@@ -890,7 +924,7 @@ namespace DeadCellsMultiplayerMod
                 SaveConfig();
                 SendUsernameToRemote();
                 ShowConnectionMenu(screen, _menuSelection == NetRole.None ? NetRole.Host : _menuSelection);
-            });
+            }, noSpaces: true);
         }
 
         public static void NotifyRemoteConnected(NetRole role)
@@ -1424,11 +1458,284 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void OpenTextInput(TitleScreen screen, string title, string initial, Action<string> onValidate)
+        internal static void HandleTextInputClipboardShortcuts()
+        {
+            var textInput = GetActiveTextInput();
+            if (textInput == null)
+                return;
+
+            if (!IsTextInputActive(textInput))
+            {
+                ClearActiveTextInput();
+                return;
+            }
+
+            if (_activeTextInputNoSpaces)
+                RemoveSpacesFromTextInput(textInput);
+
+            if (!IsCtrlDown())
+                return;
+
+            if (dc.hxd.Key.Class.isPressed(KeyC))
+            {
+                if (TryGetTextInputValue(textInput, out var text))
+                    TrySetClipboardText(text);
+                return;
+            }
+
+            if (dc.hxd.Key.Class.isPressed(KeyV))
+            {
+                var clip = TryGetClipboardText();
+                if (!string.IsNullOrEmpty(clip))
+                {
+                    if (_activeTextInputNoSpaces)
+                        clip = RemoveSpaces(clip);
+                    TrySetTextInputValue(textInput, clip);
+                }
+            }
+        }
+
+        private static bool IsCtrlDown()
+        {
+            return dc.hxd.Key.Class.isDown(KeyCtrl) || dc.hxd.Key.Class.isDown(KeyLCtrl) || dc.hxd.Key.Class.isDown(KeyRCtrl);
+        }
+
+        private static void RegisterActiveTextInput(TextInput input, bool noSpaces)
+        {
+            lock (TextInputSync)
+            {
+                _activeTextInputRef = new WeakReference<TextInput?>(input);
+                _activeTextInputNoSpaces = noSpaces;
+            }
+        }
+
+        private static void ClearActiveTextInput()
+        {
+            lock (TextInputSync)
+            {
+                _activeTextInputRef = null;
+                _activeTextInputNoSpaces = false;
+            }
+        }
+
+        private static TextInput? GetActiveTextInput()
+        {
+            lock (TextInputSync)
+            {
+                if (_activeTextInputRef != null && _activeTextInputRef.TryGetTarget(out var input))
+                    return input;
+            }
+
+            return null;
+        }
+
+        private static bool IsTextInputActive(TextInput input)
+        {
+            var active = GetMemberValue(input, "isActive", true) ?? GetMemberValue(input, "active", true);
+            if (active is bool activeBool)
+                return activeBool;
+
+            var visible = GetMemberValue(input, "visible", true) ?? GetMemberValue(input, "isVisible", true);
+            if (visible is bool visibleBool)
+                return visibleBool;
+
+            var target = GetTextInputTarget(input);
+            var focused = GetMemberValue(target, "hasFocus", true) ?? GetMemberValue(target, "focused", true);
+            if (focused is bool focusedBool)
+                return focusedBool;
+
+            return true;
+        }
+
+        private static object? GetTextInputTarget(TextInput input)
+        {
+            return GetMemberValue(input, "input", true)
+                ?? GetMemberValue(input, "textInput", true)
+                ?? GetMemberValue(input, "textField", true)
+                ?? input;
+        }
+
+        private static bool TryGetTextInputValue(TextInput input, out string text)
+        {
+            text = string.Empty;
+            var target = GetTextInputTarget(input);
+            if (target == null)
+                return false;
+
+            var value = GetMemberValue(target, "text", true)
+                ?? GetMemberValue(target, "value", true)
+                ?? GetMemberValue(target, "str", true);
+            if (value == null)
+                return false;
+
+            if (value is dc.String ds)
+            {
+                text = ds.ToString() ?? string.Empty;
+                return true;
+            }
+
+            text = value.ToString() ?? string.Empty;
+            return true;
+        }
+
+        private static bool TrySetTextInputValue(TextInput input, string text)
+        {
+            var target = GetTextInputTarget(input);
+            if (target == null)
+                return false;
+
+            if (TryInvokeTextInputSetter(target, MakeHLString(text))
+                || TryInvokeTextInputSetter(target, text))
+                return true;
+
+            return TrySetMember(target, "text", MakeHLString(text))
+                || TrySetMember(target, "value", MakeHLString(text))
+                || TrySetMember(target, "str", MakeHLString(text))
+                || TrySetMember(target, "text", text)
+                || TrySetMember(target, "value", text)
+                || TrySetMember(target, "str", text);
+        }
+
+        private static bool TryInvokeTextInputSetter(object target, object value)
+        {
+            var type = target.GetType();
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase;
+            foreach (var name in new[] { "setText", "set_text", "setValue", "set_value" })
+            {
+                var method = type.GetMethod(name, flags);
+                if (method == null)
+                    continue;
+
+                try
+                {
+                    method.Invoke(target, new[] { value });
+                    return true;
+                }
+                catch
+                {
+                    // Try next setter.
+                }
+            }
+
+            return false;
+        }
+
+        private static void RemoveSpacesFromTextInput(TextInput input)
+        {
+            if (!TryGetTextInputValue(input, out var text))
+                return;
+
+            if (!text.Contains(' ', StringComparison.Ordinal))
+                return;
+
+            TrySetTextInputValue(input, RemoveSpaces(text));
+        }
+
+        private static string RemoveSpaces(string value)
+        {
+            return value.Replace(" ", string.Empty, StringComparison.Ordinal);
+        }
+
+        private static string? TryGetClipboardText()
         {
             try
             {
-                _ = new TextInput(
+                if (!IsClipboardFormatAvailable(CfUnicodeText))
+                    return null;
+                if (!OpenClipboard(IntPtr.Zero))
+                    return null;
+
+                try
+                {
+                    var handle = GetClipboardData(CfUnicodeText);
+                    if (handle == IntPtr.Zero)
+                        return null;
+
+                    var ptr = GlobalLock(handle);
+                    if (ptr == IntPtr.Zero)
+                        return null;
+
+                    try
+                    {
+                        return Marshal.PtrToStringUni(ptr);
+                    }
+                    finally
+                    {
+                        GlobalUnlock(handle);
+                    }
+                }
+                finally
+                {
+                    CloseClipboard();
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool TrySetClipboardText(string text)
+        {
+            try
+            {
+                if (!OpenClipboard(IntPtr.Zero))
+                    return false;
+
+                try
+                {
+                    if (!EmptyClipboard())
+                        return false;
+
+                    var bytes = (text.Length + 1) * 2;
+                    var hGlobal = GlobalAlloc(GmemMoveable, (UIntPtr)bytes);
+                    if (hGlobal == IntPtr.Zero)
+                        return false;
+
+                    var target = GlobalLock(hGlobal);
+                    if (target == IntPtr.Zero)
+                    {
+                        GlobalFree(hGlobal);
+                        return false;
+                    }
+
+                    try
+                    {
+                        Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
+                        Marshal.WriteInt16(target, text.Length * 2, 0);
+                    }
+                    finally
+                    {
+                        GlobalUnlock(hGlobal);
+                    }
+
+                    if (SetClipboardData(CfUnicodeText, hGlobal) == IntPtr.Zero)
+                    {
+                        GlobalFree(hGlobal);
+                        return false;
+                    }
+
+                    return true;
+                }
+                finally
+                {
+                    CloseClipboard();
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void OpenTextInput(TitleScreen screen, string title, string initial, Action<string> onValidate, bool noSpaces = false)
+        {
+            try
+            {
+                ClearActiveTextInput();
+                if (noSpaces && initial.Contains(' ', StringComparison.Ordinal))
+                    initial = RemoveSpaces(initial);
+                var input = new TextInput(
                     screen,
                     MakeHLString(title),
                     MakeHLString(initial ?? string.Empty),
@@ -1436,14 +1743,25 @@ namespace DeadCellsMultiplayerMod
                     new HlAction<dc.String>(s =>
                     {
                         var text = s?.ToString() ?? string.Empty;
-                        onValidate(text);
+                        if (noSpaces)
+                            text = RemoveSpaces(text);
+                        try
+                        {
+                            onValidate(text);
+                        }
+                        finally
+                        {
+                            ClearActiveTextInput();
+                        }
                     }),
                     MakeHLString("Cancel"),
                     MakeHLString(string.Empty),
                     (dc.hxd.res.Sound?)null);
+                RegisterActiveTextInput(input, noSpaces);
             }
             catch (Exception ex)
             {
+                ClearActiveTextInput();
                 _log?.Warning("[NetMod] Failed to open text input: {Message}", ex.Message);
             }
         }
