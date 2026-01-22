@@ -262,6 +262,7 @@ namespace DeadCellsMultiplayerMod
             me = self;
             SendLevel(levelId);
             orig(self, oldLevel);
+            if (_netRole == NetRole.None) return;
             var net = _net;
             var localId = net?.id ?? 0;
             if (_ghost == null)
