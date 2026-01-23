@@ -34,6 +34,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.Tools.ModLang;
+using DeadCellsMultiplayerMod.KingHead;
 
 
 namespace DeadCellsMultiplayerMod
@@ -54,6 +55,7 @@ namespace DeadCellsMultiplayerMod
         public dc.pr.Game? game;
 
         public static GhostKing[] clients = new GhostKing[NetNode.MaxClientSlots];
+        public static Kinghead?[] clientHeads = new Kinghead?[NetNode.MaxClientSlots];
         public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
         public static int[] clientIds = new int[NetNode.MaxClientSlots];
         public static Hero me = null;
@@ -114,6 +116,12 @@ namespace DeadCellsMultiplayerMod
         {
             for (int i = 0; i < clients.Length; i++)
             {
+                var head = clientHeads[i];
+                if (head != null)
+                {
+                    head.dispose();
+                    clientHeads[i] = null;
+                }
                 clients[i] = null!;
                 clientLabels[i] = null;
                 clientIds[i] = 0;
@@ -281,7 +289,21 @@ namespace DeadCellsMultiplayerMod
                     client.dispose();
                     client.disposeGfx();
                 }
+                var head = clientHeads[i];
+                if (head != null)
+                {
+                    head.dispose();
+                    clientHeads[i] = null;
+                }
                 clients[i] = _ghost.CreateGhostKing(me._level);
+
+                bool fromUI = false;
+                var newHead = new Kinghead(me, clients[i], me._level);
+                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
+                // newHead.eye.x    
+                clientHeads[i] = newHead;
+
+                // clients[i].spr._animManager.play("idle".AsHaxeString(), null, null).loop(null);
                 rLastX[i] = 0;
                 rLastY[i] = 0;
                 clientLabels[i] = null;
@@ -317,16 +339,30 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        private HashSet<string> _loopAnimations = new HashSet<string>
-        {
-            "idle", "run", "jumpUp", "jumpDown", "crouch", "land",
-            "rollStart", "rolling", "rollEnd",  "blockHoldShield", "blockEndHoldShield", "runB"
-        };
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
+            UpdateGhostHeads();
+        }
+
+        private void UpdateGhostHeads()
+        {
+            var main = dc.Main.Class.ME;
+            if (main == null || main.user == null)
+            {
+                return;
+            }
+            var ftime = dc.pr.Game.Class.ME.ftime;
+            for (int i = 0; i < clientHeads.Length; i++)
+            {
+                var head = clientHeads[i];
+                if (head != null)
+                {
+                    head.updateHeadFx(ftime);
+                }
+            }
         }
 
 
