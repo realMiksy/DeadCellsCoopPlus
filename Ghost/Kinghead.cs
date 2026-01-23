@@ -80,13 +80,13 @@ namespace DeadCellsMultiplayerMod.KingHead
             FPoint fpoint;
             if (this.forcedPos == null)
             {
-                fpoint = new FPoint(x, y);
+                fpoint = new FPoint(x, y+22);
                 this.forcedPos = fpoint;
                 return;
             }
             fpoint = this.forcedPos;
             fpoint.x = x;
-            fpoint.y = y;
+            fpoint.y = y+22;
         }
 
         public override void updateHeadFx(double c1)
