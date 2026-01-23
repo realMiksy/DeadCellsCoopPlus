@@ -172,9 +172,16 @@ namespace DeadCellsMultiplayerMod
             Hook_Boot.update += hook_boot_update;
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
-
+            Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
         }
 
+        private void Hook_TitleScreen__constructor__(Hook__TitleScreen.orig___constructor__ orig, TitleScreen playMusic, bool? titleLib)
+        {
+            orig(playMusic, titleLib);
+            ConnectionUI connectionUI = new ConnectionUI(playMusic);
+            playMusic.addChild(connectionUI);
+            connectionUI.root.set_visible(false);
+        }
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {

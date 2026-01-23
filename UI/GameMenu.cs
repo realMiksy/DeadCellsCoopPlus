@@ -510,9 +510,7 @@ namespace DeadCellsMultiplayerMod
 
         private static void ShowMultiplayerMenu(TitleScreen screen)
         {
-            ConnectionUI Instance = new ConnectionUI(screen);
-            screen.addChild(Instance);
-
+            screen.ShouldAutoHideConnectionUI(true);
 
 
             var prevSuppress = _suppressAutoButton;

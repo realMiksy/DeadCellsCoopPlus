@@ -14,6 +14,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.Connection.LightingInitializer;
 using dc.hl.types;
 using dc.hxd.res;
 using dc.haxe.ds;
+using dc.achievements;
 
 namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 {
@@ -31,13 +32,23 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private static ConnectionUI? Instance;
         private HSprite? spriteui;
 
+
         public ConnectionUI(Process parent) : base(parent)
         {
+            Instance = this;
             this.createRoot(parent.root);
             MainPageLightingInitializer mainPage = new MainPageLightingInitializer(this);
             this.BuildUI();
             EventSystem.AddReceiver(this);
+            this.root.visible = set_visible;
         }
+
+        public static bool set_visible
+        {
+            get => Instance!.root.visible;
+            set => Instance!.root.visible = value;
+        }
+
 
         private void BuildUI()
         {
@@ -67,7 +78,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             {
 
                 loadspr(sprx[i], sprmodu[i], i);
-
             }
 
         }
@@ -325,9 +335,11 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             }
         }
 
+        public override void postUpdate()
+        {
+            base.postUpdate();
 
-
-
+        }
 
         private void OnClick(Event e)
         {
@@ -338,34 +350,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         public static void Initialize(ModEntry entry)
         {
             entry.Logger.Information("\x1b[36m[[ConnectionUI] Initializing...]\x1b[0m");
-            Hook__TitleScreen.__constructor__ += Hook_TitleScreen_Constructor;
-            Hook_TitleScreen.onResize += Hook_TitleScreen_OnResize;
-            Hook_TitleScreen.playMenu += Hook_TitleScreen_PlayMenu;
-            Hook__UpdatePopUp.__constructor__ += Hook__UpdatePopUp_removetile;
-
         }
 
-        private static void Hook__UpdatePopUp_removetile(Hook__UpdatePopUp.orig___constructor__ orig, UpdatePopUp from, Process validSfx, Sound _tween)
-        {
-            orig(from, validSfx, _tween);
-        }
-        private static void Hook_TitleScreen_PlayMenu(Hook_TitleScreen.orig_playMenu orig, TitleScreen self)
-        {
-            orig(self);
 
-        }
-
-        private static void Hook_TitleScreen_OnResize(Hook_TitleScreen.orig_onResize orig, TitleScreen self)
-        {
-            orig(self);
-            //Instance?.onResize();
-        }
-
-        private static void Hook_TitleScreen_Constructor(Hook__TitleScreen.orig___constructor__ orig, TitleScreen self, bool? titleLib)
-        {
-            orig(self, titleLib);
-
-        }
 
     }
 }

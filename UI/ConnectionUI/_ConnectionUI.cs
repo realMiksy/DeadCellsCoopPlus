@@ -52,5 +52,10 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             }
             return string.IsNullOrWhiteSpace(remoteUsername) ? "Guest" : remoteUsername.Trim();
         }
+        public static bool ShouldAutoHideConnectionUI(this TitleScreen titleScreen, bool visible)
+        {
+            return ConnectionUI.set_visible = visible;
+        }
+
     }
 }
