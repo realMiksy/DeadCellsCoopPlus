@@ -3,21 +3,180 @@ msgid ""
 msgstr ""
 "Project-Id-Version: ChiuYi Mod\n"
 "POT-Creation-Date: 2025-11-29 12:26+0800\n"
-"PO-Revision-Date: 2025-11-29 12:27+0800\n"
+"PO-Revision-Date: 2026-01-24 02:50+0800\n"
 "Last-Translator: Your Name <your@email.com>\n"
 "Language-Team: Chinese\n"
 "Language: zh_CN\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 3.4.2\n"
+"X-Generator: Poedit 3.8\n"
 "X-Poedit-Basepath: ../../../ModCore\n"
 "X-Poedit-SearchPath-0: .\n"
 
-
+#: Modules/Game.cs:87
 msgid "DeadCellsMultiplayerMod"
 msgstr "DeadCells 多人游戏模组"
 
-#: ConnectionUI.cs 278
+#: ConnectionUI.cs:278
 msgid "Lobby menu"
 msgstr "联机菜单"
+
+#: ConnectionUI.cs:301
+msgid "Players' list"
+msgstr "玩家列表"
+
+
+#: ConnectionUI.cs:344
+msgid "- "
+msgstr "- "
+
+#: GameMenu.cs:472
+msgid "Play multiplayer"
+msgstr "多人游戏"
+
+#: GameMenu.cs:472
+msgid "Host or join a multiplayer session"
+msgstr "创建或加入多人游戏会话"
+
+#: GameMenu.cs:485
+msgid "Host game"
+msgstr "创建游戏"
+
+#: GameMenu.cs:485
+msgid "Join game"
+msgstr "加入游戏"
+
+#: GameMenu.cs:485
+msgid "Back"
+msgstr "返回"
+
+#: GameMenu.cs:485
+msgid "Return to main menu"
+msgstr "返回主菜单"
+
+#: GameMenu.cs:485
+msgid "Create a multiplayer session"
+msgstr "创建多人游戏会话"
+
+#: GameMenu.cs:485
+msgid "Connect to an existing host"
+msgstr "连接到已有主机"
+
+#: GameMenu.cs:526
+msgid "Edit display name"
+msgstr "编辑显示名称"
+
+#: GameMenu.cs:526
+msgid "Username: "
+msgstr "用户名: "
+
+#: GameMenu.cs:531
+msgid "Edit IP"
+msgstr "编辑IP地址"
+
+#: GameMenu.cs:531
+msgid "IP: "
+msgstr "IP地址: "
+
+#: GameMenu.cs:531
+msgid "Edit IP address"
+msgstr "编辑IP地址"
+
+#: GameMenu.cs:541
+msgid "Edit port"
+msgstr "编辑端口"
+
+#: GameMenu.cs:541
+msgid "Port: "
+msgstr "端口: "
+
+
+#: GameMenu.cs:554
+msgid "Host"
+msgstr "创建"
+
+#: GameMenu.cs:554
+msgid "Start hosting"
+msgstr "开始创建游戏"
+
+#: GameMenu.cs:554
+msgid "Join"
+msgstr "加入"
+
+#: GameMenu.cs:554
+msgid "Connect to host"
+msgstr "连接到主机"
+
+#: GameMenu.cs:637
+msgid "Play"
+msgstr "开始游戏"
+
+#: GameMenu.cs:637
+msgid "Launch game"
+msgstr "启动游戏"
+
+#: GameMenu.cs:637
+msgid "Back to host setup"
+msgstr "返回主机设置"
+
+#: GameMenu.cs:666
+msgid "Disconnect"
+msgstr "断开连接"
+
+#: GameMenu.cs:666
+msgid "Disconnect and return to main menu"
+msgstr "断开连接并返回主菜单"
+
+#: GameMenu.cs:680
+msgid "Can't find lobby"
+msgstr "未找到房间"
+
+#: GameMenu.cs:680
+msgid "OK"
+msgstr "确定"
+
+#: GameMenu.cs:680
+msgid "Return to join menu"
+msgstr "返回加入游戏菜单"
+
+#: GameMenu.cs:1069
+msgid "Username"
+msgstr "用户名"
+
+#: GameMenu.cs:1070
+msgid "IP address"
+msgstr "IP地址"
+
+#: GameMenu.cs:1077
+msgid "Port"
+msgstr "端口"
+
+#: GameMenu.cs:1111
+msgid "connecting"
+msgstr "连接"
+
+#: GameMenu.cs:1115
+msgid "waiting for the host"
+msgstr "等待主机"
+
+#: GameMenu.cs:1117
+msgid "not connected"
+msgstr "未连接"
+
+#: GameMenu.cs:1119
+msgid "waiting for client"
+msgstr "等待客户端"
+
+#: GameMenu.cs:1121
+msgid "client connected"
+msgstr "客户端已连接"
+
+#: GameMenu.cs:1123
+msgid "connected to host"
+msgstr "已连接到主机"
+
+
+#: GameMenu.cs:1344
+msgid "Cancel"
+msgstr "取消"
