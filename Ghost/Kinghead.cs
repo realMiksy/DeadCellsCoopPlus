@@ -1,3 +1,4 @@
+using System;
 using dc;
 using dc.en;
 using dc.haxe.ds;
@@ -23,6 +24,7 @@ namespace DeadCellsMultiplayerMod.KingHead
         private dc.h2d.Object? headContainer;
         private dc.h2d.Object? headParticleContainer;
         private dc.h2d.Tile? headMaterial;
+        private bool? useLocalSpace;
 
         // Parameterless ctor for serializer fallback when older saves don't carry data.
         public Kinghead()
@@ -52,8 +54,17 @@ namespace DeadCellsMultiplayerMod.KingHead
             if (headSprite != null)
             {
                 headMaterial = headSprite.frameData?.tile;
-                headContainer = new dc.h2d.Object(headSprite);
-                headParticleContainer = new dc.h2d.Object(headContainer);
+                var useLocal = UseLocalSpace();
+                if (useLocal)
+                {
+                    headContainer = new dc.h2d.Object(headSprite);
+                    headParticleContainer = new dc.h2d.Object(headContainer);
+                }
+                else
+                {
+                    headContainer = null;
+                    headParticleContainer = new dc.h2d.Object(fromUI);
+                }
                 base.init(parent, headParticleContainer, fromUI1);
                 RebuildHeadParticles(headParticleContainer, headMaterial);
                 this.heroHasHead = true;
@@ -97,20 +108,6 @@ namespace DeadCellsMultiplayerMod.KingHead
             this.headAddSb.hasRotationScale = true;
             this.headAddSb.blendMode = new dc.h2d.BlendMode.Add();
         }
-        public new void setForcedPos(double x, double y)
-        {
-            FPoint fpoint;
-            if (this.forcedPos == null)
-            {
-                fpoint = new FPoint(x, y+22);
-                this.forcedPos = fpoint;
-                return;
-            }
-            fpoint = this.forcedPos;
-            fpoint.x = x;
-            fpoint.y = y+22;
-        }
-
         public override void updateHeadFx(double c1)
         {
             if (king == null)
@@ -118,28 +115,18 @@ namespace DeadCellsMultiplayerMod.KingHead
                 return;
             }
 
-            double headX;
-            double headY;
-            double localHeadX;
-            double localHeadY;
+            double headX = king.get_headX();
+            double headY = king.get_headY();
+            double localHeadX = headX;
+            double localHeadY = headY;
             var sprite = king.spr;
-            var frame = sprite?.frameData;
-            if (sprite != null && frame != null)
+            if (sprite != null && UseLocalSpace())
             {
-                localHeadX = frame.realWid * (0.5 - sprite.pivot.centerFactorX);
-                localHeadY = -frame.realHei * sprite.pivot.centerFactorY;
-                headX = sprite.x + localHeadX;
-                headY = sprite.y + localHeadY;
-            }
-            else
-            {
-                headX = king.get_headX();
-                headY = king.get_headY();
-                localHeadX = headX;
-                localHeadY = headY;
+                localHeadX = headX - sprite.x;
+                localHeadY = headY - sprite.y;
             }
 
-            if (sprite != null && headContainer != null)
+            if (sprite != null && UseLocalSpace())
             {
                 this.setForcedPos(localHeadX, localHeadY);
             }
@@ -149,6 +136,39 @@ namespace DeadCellsMultiplayerMod.KingHead
             }
             base.updateHeadFx(c1);
             this.postUpdate();
+        }
+
+        private bool UseLocalSpace()
+        {
+            if (useLocalSpace.HasValue)
+            {
+                return useLocalSpace.Value;
+            }
+
+            var hero = me;
+            var heroHead = hero?.heroHead;
+            var heroSprite = hero?.spr;
+            if (hero == null || heroHead == null || heroSprite == null)
+            {
+                useLocalSpace = true;
+                return true;
+            }
+
+            var forced = heroHead.forcedPos;
+            if (forced == null)
+            {
+                useLocalSpace = true;
+                return true;
+            }
+
+            var heroHeadX = hero.get_headX();
+            var heroHeadY = hero.get_headY();
+            var localX = heroHeadX - heroSprite.x;
+            var localY = heroHeadY - heroSprite.y;
+            var distLocal = global::System.Math.Abs(forced.x - localX) + global::System.Math.Abs(forced.y - localY);
+            var distWorld = global::System.Math.Abs(forced.x - heroHeadX) + global::System.Math.Abs(forced.y - heroHeadY);
+            useLocalSpace = distLocal <= distWorld;
+            return useLocalSpace.Value;
         }
 
     }
