@@ -15,19 +15,19 @@ using Hashlink.Virtuals;
 using ModCore.Storage;
 using ModCore.Utitities;
 using dc.spine.support.utils;
+using DeadCellsMultiplayerMod.Ghost;
 
 namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 {
     public class GhostKing : KingSkin, IHxbitSerializable<object>
     {
-        // public KingActiveSkillsManager? activeSkillsManager;
-        // public InventItem? activeWeapon;
-        public Weapon? activeWeaponImpl;
         public StringMap? animationTracks;
 
+        public Inventory inventory;
         public HeroHead head;
         public string? RemoteSkinId;
         public string? RemoteHeadSkinId;
+        public KingWeaponsManager kingWeaponsManager = null!;
 
         ScarfManager scarf;
 
@@ -50,24 +50,26 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         public override void init()
         {
+            this.inventory = ModEntry.me.inventory.clone();
+            kingWeaponsManager = new KingWeaponsManager(ModEntry.me, this);
+            kingWeaponsManager.init();
+
             base.init();
+            initScarf();
         }
 
 
         public void initScarf()
         {
-            ScarfManager scarf;
-            if (this.scarf == null)
-            {
-                scarf = new ScarfManager(this);
-                this.scarf = scarf;
-                return;
-            }
-            this.scarf.dispose();
-            scarf = new ScarfManager(this);
+            var remoteSkin = RemoteSkinId ?? ModEntry.Instance?.remoteSkin;
+            if(remoteSkin == null) remoteSkin = "PrisonerDefault";
+            var item = Cdb.Class.getSkinInfo(remoteSkin.AsHaxeString()).item;
+            var scarf = ScarfManager.Class.create(this, item);
+            
             scarf.owner = this;
-
             this.scarf = scarf;
+            // Weapon weapon;
+            // weapon.Class.create();
         }
 
 
@@ -84,7 +86,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
             int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
             this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
-            initScarf();
             this.initColorMap(skinInfo);
 
             // glow

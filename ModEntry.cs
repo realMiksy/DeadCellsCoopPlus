@@ -87,6 +87,9 @@ namespace DeadCellsMultiplayerMod
         public string lastHeadAnim;
         public static ArrayDyn customHeads;
 
+        public InventItem inventItem;
+        private bool _inventoryAddGuard;
+
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
         {
@@ -204,6 +207,35 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
+            Hook_Inventory.add += Hook_Inventory_add;
+        }
+
+        // bool added=false;
+        private InventItem Hook_Inventory_add(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
+        {
+            inventItem = i;
+            if(_inventoryAddGuard)
+                return orig(self, i);
+
+            _inventoryAddGuard = true;
+            try
+            {
+                var king = GetPrimaryClient();
+                if(king != null && king.inventory != null && i != null && !ReferenceEquals(self, king.inventory))
+                {
+                    var existing = king.inventory.getByPermanentId(i.permanentId);
+                    if(existing == null)
+                    {
+                        king.inventory.add(i);
+                        king.inventory.equip(i);
+                    }
+                }
+                return orig(self, i);
+            }
+            finally
+            {
+                _inventoryAddGuard = false;
+            }
         }
 
 
@@ -394,7 +426,15 @@ namespace DeadCellsMultiplayerMod
             SendHeroCoords();
             ReceiveGhostCoords();
             UpdateGhostHeads();
+            Attacking();
 
+        }
+
+        private void Attacking()
+        {
+            var king = GetPrimaryClient();
+            if(king == null || king.kingWeaponsManager == null) return;
+            king.kingWeaponsManager.update();
         }
 
         private void UpdateGhostHeads()
