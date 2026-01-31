@@ -19,6 +19,7 @@ namespace DeadCellsMultiplayerMod.Ghost
         private bool _usingKingContext;
         private static ObjFieldInfoCache _cachedAnimId;
         private static ObjFieldInfoCache _cachedAnimSpd;
+        private static ObjFieldInfoCache _cachedFxId;
 
         public KingWeapon(Hero owner, InventItem item, KingSkin source) : base(owner, item)
         {
@@ -49,7 +50,7 @@ namespace DeadCellsMultiplayerMod.Ghost
                 playReleaseSfx(null, null, Ref<bool>.Null, null, null);
             }
 
-            var fxId = cinf.fxId;
+            var fxId = ReadFxId(cinf);
             if(fxId != null)
             {
                 var lib = Assets.Class.fxWeapon;
@@ -203,6 +204,23 @@ namespace DeadCellsMultiplayerMod.Ghost
             try
             {
                 var raw = HaxeProxyHelper.GetFieldById<object>((HaxeProxyBase)(object)a, "animId", ref _cachedAnimId);
+                if(raw == null) return null;
+                if(raw is dc.String hs) return hs;
+                if(raw is string s) return s.AsHaxeString();
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static dc.String ReadFxId(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
+        {
+            if(a == null) return null;
+            try
+            {
+                var raw = HaxeProxyHelper.GetFieldById<object>((HaxeProxyBase)(object)a, "fxId", ref _cachedFxId);
                 if(raw == null) return null;
                 if(raw is dc.String hs) return hs;
                 if(raw is string s) return s.AsHaxeString();

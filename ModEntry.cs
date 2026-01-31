@@ -211,7 +211,8 @@ namespace DeadCellsMultiplayerMod
             Hook_Inventory.add += Hook_Inventory_add;
             Hook_Inventory.equip += Hook_Inventory_equip;
             Hook_Inventory.swapWeapons += Hook_Inventory_swapWeapons;
-            Hook_Weapon._executeImpl += Hook_Weapon__executeImpl;
+            Hook_Inventory.replace += Hook_Inventory_replace;
+            Hook_Weapon.prepare += Hook_Weapon_prepare;
         }
 
         // bool added=false;
@@ -223,11 +224,17 @@ namespace DeadCellsMultiplayerMod
             if(me != null && ReferenceEquals(self, me.inventory))
                 inventItem = i;
 
+            var result = orig(self, i);
+
             if(_netRole != NetRole.None)
-                return orig(self, i);
+            {
+                if(IsLocalInventory(self))
+                    SendEquippedWeapons(self);
+                return result;
+            }
 
             if(_inventoryAddGuard)
-                return orig(self, i);
+                return result;
 
             _inventoryAddGuard = true;
             try
@@ -242,7 +249,7 @@ namespace DeadCellsMultiplayerMod
                         king.inventory.equip(i);
                     }
                 }
-                return orig(self, i);
+                return result;
             }
             finally
             {
@@ -271,27 +278,32 @@ namespace DeadCellsMultiplayerMod
             SendEquippedWeapons(self);
         }
 
-        private void Hook_Weapon__executeImpl(Hook_Weapon.orig__executeImpl orig, Weapon self, double anyHit)
+        private void Hook_Inventory_replace(Hook_Inventory.orig_replace orig, Inventory self, InventItem by, InventItem oldPos)
         {
-            orig(self, anyHit);
+            orig(self, by, oldPos);
+            if(_inventorySyncGuard)
+                return;
+            if(!IsLocalInventory(self))
+                return;
+            SendEquippedWeapons(self);
+        }
 
-            if(_netRole == NetRole.None)
-                return;
-            if(self == null || me == null)
-                return;
-            if(self is DeadCellsMultiplayerMod.Ghost.KingWeapon)
-                return;
-            if(!ReferenceEquals(self.owner, me))
-                return;
+        private void Hook_Weapon_prepare(Hook_Weapon.orig_prepare orig, Weapon self, double attackSpeed)
+        {
+            if(_netRole != NetRole.None && self != null && me != null)
+            {
+                if(!(self is DeadCellsMultiplayerMod.Ghost.KingWeapon) && ReferenceEquals(self.owner, me))
+                {
+                    var item = self.item;
+                    if(item != null && TryGetWeaponKindId(item, out var kindId))
+                    {
+                        var slot = GetWeaponSlot(me.inventory, item);
+                        _net?.SendAttack(kindId!, slot, item.permanentId);
+                    }
+                }
+            }
 
-            var item = self.item;
-            if(item == null)
-                return;
-            if(!TryGetWeaponKindId(item, out var kindId))
-                return;
-
-            var slot = GetWeaponSlot(me.inventory, item);
-            _net?.SendAttack(kindId!, slot, item.permanentId);
+            orig(self, attackSpeed);
         }
 
 
@@ -806,6 +818,7 @@ namespace DeadCellsMultiplayerMod
 
             var inv = client.inventory;
             var existing = permanentId != 0 ? inv.getByPermanentId(permanentId) : null;
+            var currentSlotItem = slot >= 0 ? inv.getEquippedWeaponOn(slot) : null;
             if (existing == null)
             {
                 var newItem = new InventItem(new InventItemKind.Weapon(cleaned.AsHaxeString()));
@@ -816,6 +829,8 @@ namespace DeadCellsMultiplayerMod
                 _inventorySyncGuard = true;
                 try
                 {
+                    if(currentSlotItem != null)
+                        currentSlotItem.posID = -1;
                     inv.add(newItem);
                 }
                 finally
@@ -823,6 +838,10 @@ namespace DeadCellsMultiplayerMod
                     _inventorySyncGuard = false;
                 }
                 existing = newItem;
+            }
+            else if(currentSlotItem != null && currentSlotItem.permanentId != existing.permanentId)
+            {
+                currentSlotItem.posID = -1;
             }
 
             if (slot >= 0)
