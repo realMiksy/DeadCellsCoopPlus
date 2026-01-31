@@ -384,7 +384,8 @@ namespace DeadCellsMultiplayerMod
             var play = plays.ToString();
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
-                SendHeroAnim(play, queueAnim, g, force: true);
+                if (!IsAttackAnim(play))
+                    SendHeroAnim(play, queueAnim, g, force: true);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
@@ -392,6 +393,16 @@ namespace DeadCellsMultiplayerMod
             }
 
             return orig(self, plays, queueAnim, g);
+        }
+
+        private static bool IsAttackAnim(string anim)
+        {
+            if (string.IsNullOrWhiteSpace(anim)) return false;
+            var a = anim.Trim();
+            if (a.StartsWith("w_", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("attack", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("atk", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         public void hook_level_changed(Hook_Hero.orig_onLevelChanged orig, Hero self, Level oldLevel)
