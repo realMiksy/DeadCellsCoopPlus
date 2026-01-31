@@ -89,6 +89,7 @@ namespace DeadCellsMultiplayerMod
 
         public InventItem inventItem;
         private bool _inventoryAddGuard;
+        private bool _inventorySyncGuard;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -208,12 +209,23 @@ namespace DeadCellsMultiplayerMod
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Hook_Inventory.add += Hook_Inventory_add;
+            Hook_Inventory.equip += Hook_Inventory_equip;
+            Hook_Inventory.swapWeapons += Hook_Inventory_swapWeapons;
+            Hook_Weapon._executeImpl += Hook_Weapon__executeImpl;
         }
 
         // bool added=false;
         private InventItem Hook_Inventory_add(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
         {
-            inventItem = i;
+            if(_inventorySyncGuard)
+                return orig(self, i);
+
+            if(me != null && ReferenceEquals(self, me.inventory))
+                inventItem = i;
+
+            if(_netRole != NetRole.None)
+                return orig(self, i);
+
             if(_inventoryAddGuard)
                 return orig(self, i);
 
@@ -236,6 +248,50 @@ namespace DeadCellsMultiplayerMod
             {
                 _inventoryAddGuard = false;
             }
+        }
+
+        private bool Hook_Inventory_equip(Hook_Inventory.orig_equip orig, Inventory self, InventItem i)
+        {
+            var result = orig(self, i);
+            if(_inventorySyncGuard)
+                return result;
+            if(!IsLocalInventory(self))
+                return result;
+            SendEquippedWeapons(self);
+            return result;
+        }
+
+        private void Hook_Inventory_swapWeapons(Hook_Inventory.orig_swapWeapons orig, Inventory self)
+        {
+            orig(self);
+            if(_inventorySyncGuard)
+                return;
+            if(!IsLocalInventory(self))
+                return;
+            SendEquippedWeapons(self);
+        }
+
+        private void Hook_Weapon__executeImpl(Hook_Weapon.orig__executeImpl orig, Weapon self, double anyHit)
+        {
+            orig(self, anyHit);
+
+            if(_netRole == NetRole.None)
+                return;
+            if(self == null || me == null)
+                return;
+            if(self is DeadCellsMultiplayerMod.Ghost.KingWeapon)
+                return;
+            if(!ReferenceEquals(self.owner, me))
+                return;
+
+            var item = self.item;
+            if(item == null)
+                return;
+            if(!TryGetWeaponKindId(item, out var kindId))
+                return;
+
+            var slot = GetWeaponSlot(me.inventory, item);
+            _net?.SendAttack(kindId!, slot, item.permanentId);
         }
 
 
@@ -397,6 +453,7 @@ namespace DeadCellsMultiplayerMod
         {
             me = self;
             orig(self, lvl, cx, cy);
+            SendEquippedWeapons(self.inventory);
         }
 
 
@@ -425,16 +482,15 @@ namespace DeadCellsMultiplayerMod
             if (me == null) return;
             SendHeroCoords();
             ReceiveGhostCoords();
+            ReceiveGhostWeapons();
+            ReceiveGhostAttacks();
+            UpdateGhostWeapons();
             UpdateGhostHeads();
-            Attacking();
-
         }
 
         private void Attacking()
         {
-            var king = GetPrimaryClient();
-            if(king == null || king.kingWeaponsManager == null) return;
-            king.kingWeaponsManager.update();
+            UpdateGhostWeapons();
         }
 
         private void UpdateGhostHeads()
@@ -583,6 +639,51 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
+        private void ReceiveGhostWeapons()
+        {
+            var net = _net;
+            if (net == null || me == null) return;
+
+            if (!net.TryConsumeRemoteWeaponSnapshots(out var updates))
+                return;
+
+            foreach (var update in updates)
+            {
+                ApplyRemoteWeaponUpdate(update.Id, update.Kind, update.Slot, update.PermanentId);
+            }
+        }
+
+        private void ReceiveGhostAttacks()
+        {
+            var net = _net;
+            if (net == null || me == null) return;
+
+            if (!net.TryConsumeRemoteAttacks(out var attacks))
+                return;
+
+            var localId = net.id;
+            foreach (var attack in attacks)
+            {
+                ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId);
+                if (!TryGetClientIndex(localId, attack.Id, out var index))
+                    continue;
+
+                var client = clients[index];
+                if (client?.kingWeaponsManager == null) continue;
+                client.kingWeaponsManager.queueAttack(attack.Slot);
+            }
+        }
+
+        private void UpdateGhostWeapons()
+        {
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client?.kingWeaponsManager == null) continue;
+                client.kingWeaponsManager.update();
+            }
+        }
+
         private void PlayGhostAnim(GhostKing client, string anim, int? queueAnim, bool? g)
         {
             if (client?.spr?._animManager == null) return;
@@ -626,6 +727,105 @@ namespace DeadCellsMultiplayerMod
             var net = _net;
             if (net == null || string.IsNullOrWhiteSpace(anim)) return;
             net.SendHeadAnim(anim);
+        }
+
+        private void SendEquippedWeapons(Inventory inv)
+        {
+            if (_netRole == NetRole.None || inv == null) return;
+            var w0 = inv.getEquippedWeaponOn(0);
+            if (w0 != null)
+                SendInventoryWeapon(w0, 0);
+            var w1 = inv.getEquippedWeaponOn(1);
+            if (w1 != null)
+                SendInventoryWeapon(w1, 1);
+        }
+
+        private void SendInventoryWeapon(InventItem item, int slot)
+        {
+            if (_netRole == NetRole.None) return;
+            if (item == null) return;
+            if (!TryGetWeaponKindId(item, out var kindId)) return;
+            var net = _net;
+            if (net == null || string.IsNullOrWhiteSpace(kindId)) return;
+            net.SendInventoryWeapon(kindId!, slot, item.permanentId);
+        }
+
+        private static bool TryGetWeaponKindId(InventItem item, out string? kindId)
+        {
+            kindId = null;
+            if (item == null) return false;
+            var kind = item.kind;
+            if (kind is InventItemKind.Weapon w)
+            {
+                kindId = w.Param0?.ToString();
+                return !string.IsNullOrWhiteSpace(kindId);
+            }
+            return false;
+        }
+
+        private static int GetWeaponSlot(Inventory inv, InventItem item)
+        {
+            if (inv == null || item == null) return -1;
+            var id = item.permanentId;
+            var w0 = inv.getEquippedWeaponOn(0);
+            if (w0 != null && w0.permanentId == id) return 0;
+            var w1 = inv.getEquippedWeaponOn(1);
+            if (w1 != null && w1.permanentId == id) return 1;
+            return item.posID;
+        }
+
+        private bool IsLocalInventory(Inventory self)
+        {
+            return me != null && self != null && ReferenceEquals(self, me.inventory);
+        }
+
+        private void ApplyRemoteWeaponUpdate(int remoteId, string? kindId, int slot, int permanentId)
+        {
+            if (string.IsNullOrWhiteSpace(kindId)) return;
+            var net = _net;
+            var localId = net?.id ?? 0;
+            if (!TryGetClientIndex(localId, remoteId, out var index))
+                return;
+
+            var client = clients[index];
+            if (client?.inventory == null) return;
+
+            var cleaned = kindId.Replace("|", "/").Trim();
+            if (cleaned.Length == 0) return;
+
+            var inv = client.inventory;
+            var existing = permanentId != 0 ? inv.getByPermanentId(permanentId) : null;
+            if (existing == null)
+            {
+                var newItem = new InventItem(new InventItemKind.Weapon(cleaned.AsHaxeString()));
+                if (permanentId != 0)
+                    newItem.permanentId = permanentId;
+                if (slot >= 0)
+                    newItem.posID = slot;
+                _inventorySyncGuard = true;
+                try
+                {
+                    inv.add(newItem);
+                }
+                finally
+                {
+                    _inventorySyncGuard = false;
+                }
+                existing = newItem;
+            }
+
+            if (slot >= 0)
+                existing.posID = slot;
+
+            _inventorySyncGuard = true;
+            try
+            {
+                inv.equip(existing);
+            }
+            finally
+            {
+                _inventorySyncGuard = false;
+            }
         }
 
 

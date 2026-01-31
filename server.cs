@@ -65,6 +65,11 @@ public sealed class NetNode : IDisposable
         public string HeadAnim;
         public bool HasHeadAnim;
 
+        public string? WeaponKind;
+        public int WeaponSlot;
+        public int WeaponPermanentId;
+        public bool HasWeaponUpdate;
+
         public RemoteState(int id)
         {
             Id = id;
@@ -98,6 +103,38 @@ public sealed class NetNode : IDisposable
             Username = username;
             HeadAnim = headAnim;
             HasHeadAnim = hasHeadAnim;
+        }
+    }
+
+    public readonly struct RemoteWeaponSnapshot
+    {
+        public readonly int Id;
+        public readonly string? Kind;
+        public readonly int Slot;
+        public readonly int PermanentId;
+
+        public RemoteWeaponSnapshot(int id, string? kind, int slot, int permanentId)
+        {
+            Id = id;
+            Kind = kind;
+            Slot = slot;
+            PermanentId = permanentId;
+        }
+    }
+
+    public readonly struct RemoteAttack
+    {
+        public readonly int Id;
+        public readonly string? Kind;
+        public readonly int Slot;
+        public readonly int PermanentId;
+
+        public RemoteAttack(int id, string? kind, int slot, int permanentId)
+        {
+            Id = id;
+            Kind = kind;
+            Slot = slot;
+            PermanentId = permanentId;
         }
     }
 
@@ -153,6 +190,7 @@ public sealed class NetNode : IDisposable
     private readonly object _clientsLock = new();
     private readonly Dictionary<int, ClientConnection> _clients = new();
     private readonly Dictionary<int, RemoteState> _remotes = new();
+    private readonly List<RemoteAttack> _pendingAttacks = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -705,6 +743,59 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("INV|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line[(line.IndexOf('|') + 1)..];
+            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.WeaponKind = kind;
+                    state.WeaponSlot = slot;
+                    state.WeaponPermanentId = permanentId;
+                    state.HasWeaponUpdate = true;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildWeaponLine("INV", effectiveId.Value, kind, slot, permanentId);
+            }
+            return true;
+        }
+
+        if (line.StartsWith("ATK|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line[(line.IndexOf('|') + 1)..];
+            ParseWeaponPayload(payload, out var parsedId, out var kind, out var slot, out var permanentId);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+            if (effectiveId.HasValue)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    _pendingAttacks.Add(new RemoteAttack(effectiveId.Value, kind, slot, permanentId));
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildWeaponLine("ATK", effectiveId.Value, kind, slot, permanentId);
+            }
+            return true;
+        }
+
         if (line.StartsWith("HP|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
@@ -821,6 +912,7 @@ public sealed class NetNode : IDisposable
         lock (_sync)
         {
             RemoveRemoteLocked(sender.AssignedId);
+            _pendingAttacks.RemoveAll(a => a.Id == sender.AssignedId);
             _hasRemote = hasClients;
         }
 
@@ -844,6 +936,7 @@ public sealed class NetNode : IDisposable
             _connectedClientCount = 0;
             _remotes.Clear();
             _primaryRemoteId = 0;
+            _pendingAttacks.Clear();
         }
         CloseClientConnection();
         GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
@@ -930,6 +1023,34 @@ public sealed class NetNode : IDisposable
 
         if (parts.Length > startIndex)
             animName = parts[startIndex];
+    }
+
+    private static void ParseWeaponPayload(string payload, out int? parsedId, out string kind, out int slot, out int permanentId)
+    {
+        parsedId = null;
+        kind = string.Empty;
+        slot = -1;
+        permanentId = 0;
+
+        var parts = payload.Split('|');
+        var startIndex = 0;
+        if (parts.Length >= 2 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var idValue))
+        {
+            parsedId = idValue;
+            startIndex = 1;
+        }
+
+        if (parts.Length > startIndex)
+            kind = parts[startIndex];
+
+        if (parts.Length > startIndex + 1 &&
+            int.TryParse(parts[startIndex + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedSlot))
+            slot = parsedSlot;
+
+        if (parts.Length > startIndex + 2 &&
+            int.TryParse(parts[startIndex + 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPermanent))
+            permanentId = parsedPermanent;
     }
 
     private static void ParseHpPayload(string payload, out int? parsedId, out int life, out int maxLife, out int lif, out int bonusLife, out int recover)
@@ -1030,6 +1151,11 @@ public sealed class NetNode : IDisposable
     private static string BuildHeadAnimLine(int id, string animName)
     {
         return $"HEADANIM|{id}|{animName}\n";
+    }
+
+    private static string BuildWeaponLine(string tag, int id, string kind, int slot, int permanentId)
+    {
+        return $"{tag}|{id}|{kind}|{slot}|{permanentId}\n";
     }
 
     private static string BuildHpLine(int id, int life, int maxLife, int lif, int bonusLife, int recover)
@@ -1289,6 +1415,34 @@ public sealed class NetNode : IDisposable
         SendRaw($"ANIM|{idPart}{safe}|{queuePart}|{gPart}");
     }
 
+    public void SendInventoryWeapon(string kind, int slot, int permanentId)
+    {
+        if (!HasAnyConnection())
+        {
+            return;
+        }
+
+        var safe = (kind ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (safe.Length == 0) return;
+
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw($"INV|{idPart}{safe}|{slot}|{permanentId}");
+    }
+
+    public void SendAttack(string kind, int slot, int permanentId)
+    {
+        if (!HasAnyConnection())
+        {
+            return;
+        }
+
+        var safe = (kind ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        if (safe.Length == 0) return;
+
+        var idPart = ID > 0 ? $"{ID}|" : string.Empty;
+        SendRaw($"ATK|{idPart}{safe}|{slot}|{permanentId}");
+    }
+
     public void SendHeroSkin(string skin)
     {
         if (!HasAnyConnection())
@@ -1391,6 +1545,46 @@ public sealed class NetNode : IDisposable
             }
 
             return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryConsumeRemoteWeaponSnapshots(out List<RemoteWeaponSnapshot> snapshot)
+    {
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+            {
+                snapshot = new List<RemoteWeaponSnapshot>();
+                return false;
+            }
+
+            snapshot = new List<RemoteWeaponSnapshot>();
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote || !state.HasWeaponUpdate)
+                    continue;
+
+                snapshot.Add(new RemoteWeaponSnapshot(state.Id, state.WeaponKind, state.WeaponSlot, state.WeaponPermanentId));
+                state.HasWeaponUpdate = false;
+            }
+
+            return snapshot.Count > 0;
+        }
+    }
+
+    public bool TryConsumeRemoteAttacks(out List<RemoteAttack> attacks)
+    {
+        lock (_sync)
+        {
+            if (_pendingAttacks.Count == 0)
+            {
+                attacks = new List<RemoteAttack>();
+                return false;
+            }
+
+            attacks = new List<RemoteAttack>(_pendingAttacks);
+            _pendingAttacks.Clear();
+            return attacks.Count > 0;
         }
     }
 
