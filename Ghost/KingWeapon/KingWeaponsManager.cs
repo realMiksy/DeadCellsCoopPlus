@@ -3,6 +3,7 @@ using dc.tool;
 using dc.tool.hero;
 using dc.tool.weap;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using System.Diagnostics;
 
 namespace DeadCellsMultiplayerMod.Ghost
 {
@@ -14,6 +15,11 @@ namespace DeadCellsMultiplayerMod.Ghost
         private InventItem weaponItem = null!;
         private int pendingAttacks;
         private int pendingSlot = -1;
+        private long _shieldLastPulseTicks;
+        private bool _shieldActive;
+        private long _shieldIgnorePulsesUntilTicks;
+
+        public bool IsShieldActive => _shieldActive;
 
         public KingWeaponsManager(Hero hero, GhostKing king) : base(hero)
         {
@@ -42,10 +48,64 @@ namespace DeadCellsMultiplayerMod.Ghost
 
                 weaponItem = item;
                 weapon = KingWeaponSupport.CreateWeapon(hero, item, king);
+                _shieldActive = false;
+                _shieldLastPulseTicks = 0;
+                _shieldIgnorePulsesUntilTicks = 0;
+                ClearShieldAffects();
             }
 
             var game = dc.pr.Game.Class.ME;
             if(game != null) weapon.cd.update(game.tmod);
+
+            if(weapon is BaseShield shield)
+            {
+                var now = Stopwatch.GetTimestamp();
+
+                if(pendingAttacks > 0)
+                {
+                    // Treat incoming ATK as "button still held" pulses. Don't stack them.
+                    pendingAttacks = 0;
+
+                    // When the remote releases the shield, a few late ATK packets can arrive and would re-trigger hold,
+                    // causing the animation/state to flicker (release -> hold -> release ...). Ignore pulses briefly after release.
+                    if(now < _shieldIgnorePulsesUntilTicks)
+                    {
+                        // Pulse ignored.
+                    }
+                    else
+                    {
+                        _shieldLastPulseTicks = now;
+
+                        if(!_shieldActive && weapon.isReady())
+                        {
+                            ClearShieldAffects();
+                            KingWeaponSupport.SyncSource(weapon);
+                            weapon.prepare(getWeaponAttackSpeed(weapon));
+                            _shieldActive = true;
+                        }
+                    }
+                }
+
+                if(_shieldActive && !weapon.destroyed)
+                {
+                    // Keep the shield logic running while we receive pulses; when pulses stop, release.
+                    weapon.fixedUpdate();
+                    weapon.postUpdate();
+
+                    var sincePulse = now - _shieldLastPulseTicks;
+                    var releaseAfter = (long)(Stopwatch.Frequency * 0.18);
+                    if(_shieldLastPulseTicks != 0 && sincePulse > releaseAfter)
+                    {
+                        weapon.interrupt();
+                        _shieldActive = false;
+                        _shieldLastPulseTicks = 0;
+                        _shieldIgnorePulsesUntilTicks = now + (long)(Stopwatch.Frequency * 0.25);
+                        ClearShieldAffects();
+                    }
+                }
+
+                return;
+            }
 
             if(pendingAttacks > 0 && weapon.isReady())
             {
@@ -53,10 +113,6 @@ namespace DeadCellsMultiplayerMod.Ghost
 
                 weapon.prepare(getWeaponAttackSpeed(weapon));
 
-                if(weapon is BaseShield shield)
-                {
-                    shield.startParry();
-                }
                 pendingAttacks--;
             }
 
@@ -72,6 +128,13 @@ namespace DeadCellsMultiplayerMod.Ghost
             if(slot >= 0) pendingSlot = slot;
             if(pendingAttacks < 3)
                 pendingAttacks++;
+        }
+
+        private void ClearShieldAffects()
+        {
+            try { king.removeAllAffects(96); } catch { }
+            try { king.removeAllAffects(98); } catch { }
+            try { king.removeAllAffects(99); } catch { }
         }
 
         private InventItem? GetWeaponItem(int slot)

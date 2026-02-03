@@ -2,6 +2,7 @@
 using ModCore.Events.Interfaces.Game;
 using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Mods;
+using System.Diagnostics;
 using System.Net;
 using dc.en;
 using dc.pr;
@@ -74,6 +75,7 @@ namespace DeadCellsMultiplayerMod
         private bool? _lastAnimGSent;
         private double _animResendElapsed;
         private double? _lastAnimPlayRatio;
+        private long _suppressHeroAnimUntilTicks;
 
         public static MiniMap miniMap;
 
@@ -204,6 +206,7 @@ namespace DeadCellsMultiplayerMod
             Hook_LevelGen.generateGraph += GameDataSync.hook_generateGraph;
             Hook_StoryManager.levelRequiresLoreRoom += GameDataSync.hook_levelRequiresLoreRoom;
             Hook_AnimManager.play += Hook_AnimManager_play;
+            Hook_AnimManager.stopWithStateAnims += Hook_AnimManager_stopWithStateAnims;
             Hook_Viewport.bumpDir += Hook_Viewport_bumpDir;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
@@ -387,6 +390,7 @@ namespace DeadCellsMultiplayerMod
                     {
                         var slot = GetWeaponSlot(me.inventory, item);
                         _net?.SendAttack(kindId!, slot, item.permanentId);
+                        _suppressHeroAnimUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.25);
                     }
                 }
             }
@@ -827,7 +831,9 @@ namespace DeadCellsMultiplayerMod
 
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
-                if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext && !IsAttackAnim(play))
+                if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext &&
+                    Stopwatch.GetTimestamp() >= _suppressHeroAnimUntilTicks &&
+                    !IsAttackAnim(play))
                     SendHeroAnim(play, queueAnim, g, force: true);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
@@ -836,6 +842,65 @@ namespace DeadCellsMultiplayerMod
             }
 
             return orig(self, plays, queueAnim, g);
+        }
+
+        private void Hook_AnimManager_stopWithStateAnims(Hook_AnimManager.orig_stopWithStateAnims orig, AnimManager self)
+        {
+            orig(self);
+
+            if(_netRole == NetRole.None)
+                return;
+            if(DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext)
+                return;
+
+            if(me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
+            {
+                if(Stopwatch.GetTimestamp() < _suppressHeroAnimUntilTicks)
+                    return;
+
+                string anim = "idle";
+                try
+                {
+                    var group = me.spr.groupName;
+                    if(group != null)
+                        anim = group.ToString();
+                }
+                catch
+                {
+                    anim = "idle";
+                }
+
+                anim = SanitizeRemoteBaseAnim(anim);
+                if(!string.IsNullOrWhiteSpace(anim))
+                    SendHeroAnim(anim, null, null, force: false);
+            }
+        }
+
+        private static string SanitizeRemoteBaseAnim(string anim)
+        {
+            if(string.IsNullOrWhiteSpace(anim))
+                return "idle";
+
+            var a = anim.Trim();
+            if(string.IsNullOrWhiteSpace(a))
+                return "idle";
+
+            // If we ended up here from a weapon transition (shield release etc),
+            // make sure we don't push a weapon/hold/parry animation into ANIM replication.
+            if(IsAttackAnim(a))
+                return "idle";
+            if(a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "idle";
+            if(a.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "idle";
+            if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "idle";
+            if(a.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "idle";
+            if(a.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "idle";
+
+            return a;
         }
 
         private static bool IsAttackAnim(string anim)
@@ -847,6 +912,7 @@ namespace DeadCellsMultiplayerMod
             if (a.StartsWith("atk", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.IndexOf("shoot", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("charge", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("bow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("crossbow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("xbow", StringComparison.OrdinalIgnoreCase) >= 0) return true;
@@ -1144,10 +1210,79 @@ namespace DeadCellsMultiplayerMod
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
+
+            var shieldActive = client.kingWeaponsManager != null && client.kingWeaponsManager.IsShieldActive;
+            if (shieldActive && ShouldLoopRemoteAnim(anim))
+            {
+                // While a shield is being held, let the shield weapon logic drive the animation/frames.
+                // Otherwise incoming locomotion/idles fight the hold/parry state and cause wrong frames/flicker.
+                return;
+            }
+
+            // Shield hold/parry should be driven by the weapon logic (ATK + local weapon update),
+            // not by ANIM replication. Otherwise release/hold transitions start fighting and flicker.
+            if (anim.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                anim.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0)
+                return;
+
             var animManager = client.spr._animManager;
+            try
+            {
+                var current = client.spr.groupName;
+                if(current != null && string.Equals(current.ToString(), anim, StringComparison.Ordinal))
+                    return;
+            }
+            catch
+            {
+            }
+
+            if (ShouldLoopRemoteAnim(anim))
+            {
+                // BaseShield uses affects 96/98/99 for parry/hold flow (see ILSpy). If the remote released the shield,
+                // we don't want stale affects on GhostKing to keep re-applying hold/parry state anims and causing flicker.
+                if (!shieldActive)
+                {
+                    try { client.removeAllAffects(96); } catch { }
+                    try { client.removeAllAffects(98); } catch { }
+                    try { client.removeAllAffects(99); } catch { }
+                }
+
+                try { animManager.stopWithStateAnims(); } catch { }
+                animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
+                return;
+            }
+
             var playback = animManager.play(anim.AsHaxeString(), queueAnim, g);
-            if (!IsAttackAnim(anim))
+            if (ShouldLoopRemoteAnim(anim) && !IsAttackAnim(anim))
                 playback.loop(null);
+        }
+
+        private static bool ShouldLoopRemoteAnim(string anim)
+        {
+            if(string.IsNullOrWhiteSpace(anim)) return false;
+            var a = anim.Trim();
+
+            // Don't ever force-loop weapon/hold-ish states; those should be driven by weapon replication.
+            if(IsAttackAnim(a)) return false;
+            if(a.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+
+            // Loop only locomotion/idles to avoid getting stuck in "hold/parry" forever.
+            if (a.StartsWith("idle", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("run", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.StartsWith("walk", StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.IndexOf("move", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("fall", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("land", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
         }
 
         private void PlayGhostHeadAnim(GhostKing client, string anim)
