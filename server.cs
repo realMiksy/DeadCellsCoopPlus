@@ -327,6 +327,9 @@ public sealed class NetNode : IDisposable
                     var countersPayload = GameDataSync.HostCountersPayload;
                     if (countersPayload != null)
                         await SendLineToClientSafe(connection, $"COUNTERS|{countersPayload}\n").ConfigureAwait(false);
+                    var blueprintsPayload = GameDataSync.HostBlueprintsPayload;
+                    if (blueprintsPayload != null)
+                        await SendLineToClientSafe(connection, $"BLUEPRINTS|{blueprintsPayload}\n").ConfigureAwait(false);
                 }
 
                 GameMenu.EnqueueMainThread(() =>
@@ -520,6 +523,14 @@ public sealed class NetNode : IDisposable
             var payload = line["COUNTERS|".Length..];
             lock (_sync) _hasRemote = true;
             GameDataSync.ReceiveCounters(payload);
+            return true;
+        }
+
+        if (line.StartsWith("BLUEPRINTS|"))
+        {
+            var payload = line["BLUEPRINTS|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveBlueprints(payload);
             return true;
         }
 
@@ -1287,6 +1298,19 @@ public sealed class NetNode : IDisposable
         var safeCounters = (countersPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
         SendRaw($"COUNTERS|{safeCounters}");
         _log.Information("[NetNode] Sent counters sync");
+    }
+
+    public void SendBlueprints(string blueprintsPayload)
+    {
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending blueprints sync: no connected client");
+            return;
+        }
+
+        var safeBlueprints = (blueprintsPayload ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+        SendRaw($"BLUEPRINTS|{safeBlueprints}");
+        _log.Information("[NetNode] Sent blueprints sync");
     }
 
     public void SendUsername(string username)

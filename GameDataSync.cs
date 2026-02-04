@@ -9,6 +9,7 @@ using ModCore.Utitities;
 using System;
 using System.Globalization;
 using System.Text;
+using dc.hl.types;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -28,6 +29,8 @@ namespace DeadCellsMultiplayerMod
 
         private static string? _remoteCountersPayload;
         public static string? HostCountersPayload;
+        private static string? _remoteBlueprintsPayload;
+        public static string? HostBlueprintsPayload;
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
@@ -56,7 +59,6 @@ namespace DeadCellsMultiplayerMod
 
             if (net != null && net.IsHost)
             {
-                SendCounters(self, net);
                 Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
                 SendBossRune(self, net);
                 net.SendSeed(Seed);
@@ -65,6 +67,8 @@ namespace DeadCellsMultiplayerMod
             {
                 if (!string.IsNullOrEmpty(_remoteCountersPayload))
                     ReceiveCounters(_remoteCountersPayload, self);
+                if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
+                    ReceiveBlueprints(_remoteBlueprintsPayload, self);
                 if (GameMenu.TryGetRemoteSeed(out var remoteSeed))
                 {
                     Seed = remoteSeed;
@@ -86,7 +90,117 @@ namespace DeadCellsMultiplayerMod
             self.pickDeathItem();
             SendHeroSkin(self, net);
             SendHeroHeadSkin(self, net);
+            SendCounters(self, net);
+            SendBlueprints(self, net);
             orig(self, lvl, isTwitch, isCustom, mode, gdata);
+        }
+
+        public static void ReceiveBlueprints(string payload, User? target = null)
+        {
+            _remoteBlueprintsPayload = payload;
+            if (string.IsNullOrEmpty(payload))
+                return;
+
+            void apply(User user)
+            {
+                var item = new StringBuilder();
+                var escaped = false;
+                var meta = user.itemMeta;
+                if (meta == null)
+                {
+                    meta = new ItemMetaManager(user);
+                    user.itemMeta = meta;
+                }
+
+                for (var i = 0; i < payload.Length; i++)
+                {
+                    var c = payload[i];
+                    if (escaped)
+                    {
+                        item.Append(c);
+                        escaped = false;
+                        continue;
+                    }
+
+                    if (c == '\\')
+                    {
+                        escaped = true;
+                        continue;
+                    }
+
+                    if (c == '|')
+                    {
+                        if (item.Length > 0)
+                        {
+                            var text = item.ToString();
+                            if (!string.IsNullOrWhiteSpace(text))
+                                meta.unlockItem(text.AsHaxeString());
+                            item.Clear();
+                        }
+                        continue;
+                    }
+
+                    item.Append(c);
+                }
+
+                if (item.Length > 0)
+                {
+                    var text = item.ToString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                        meta.unlockItem(text.AsHaxeString());
+                }
+            }
+
+            if (target != null)
+            {
+                apply(target);
+                return;
+            }
+
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    var main = dc.Main.Class.ME;
+                    if (main?.user != null)
+                        apply(main.user);
+                }
+                catch
+                {
+                }
+            });
+        }
+
+        public static void SendBlueprints(User user, NetNode? net)
+        {
+            if (user == null)
+                return;
+
+            var meta = user.itemMeta;
+            var list = meta?.itemProgress;
+            var builder = new StringBuilder();
+            if (list != null)
+            {
+                var first = true;
+                for (int i = 0; i < list.length; i++)
+                {
+                    var progress = list.getDyn(i) as ItemProgress;
+                    if (progress == null || !progress.unlocked)
+                        continue;
+                    var text = progress.itemId?.ToString();
+                    if (string.IsNullOrWhiteSpace(text))
+                        continue;
+                    if (!first)
+                        builder.Append('|');
+                    builder.Append(text.Replace("\\", "\\\\").Replace("|", "\\|"));
+                    first = false;
+                }
+            }
+
+            var payload = builder.ToString();
+            HostBlueprintsPayload = payload;
+            if (net != null && net.IsAlive)
+                net.SendBlueprints(payload);
         }
 
         public static void ReceiveCounters(string payload, User? target = null)
@@ -246,7 +360,6 @@ namespace DeadCellsMultiplayerMod
 
             if (!int.TryParse(payload, NumberStyles.Integer, CultureInfo.InvariantCulture, out var bossRune))
             {
-                _log?.Warning("[NetMod] Failed to parse boss rune payload: {Payload}", payload);
                 return;
             }
 
@@ -255,7 +368,6 @@ namespace DeadCellsMultiplayerMod
                 _remoteBossRune = bossRune;
             }
 
-            _log?.Information("[NetMod] Received boss rune {BossRune}", bossRune);
         }
 
         public static bool TryGetHostBossRune(out int bossRune)
@@ -290,35 +402,23 @@ namespace DeadCellsMultiplayerMod
 
         public static void ReceiveHeroSkin(string skin)
         {
-            try
-            {
-                var cleaned = CleanSkin(skin);
-                if (string.IsNullOrWhiteSpace(cleaned))
-                    cleaned = "PrisonerDefault";
+            
+            var cleaned = CleanSkin(skin);
+            if (string.IsNullOrWhiteSpace(cleaned))
+                cleaned = "PrisonerDefault";
 
-                ModEntry.SetRemoteSkin(cleaned);
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to receive hero skin: {Message}", ex.Message);
-            }
+            ModEntry.SetRemoteSkin(cleaned);
+            
         }
 
 
         public static void ReceiveHeroHeadSkin(string skin)
         {
-            try
-            {
-                var cleaned = CleanSkin(skin);
-                if (string.IsNullOrWhiteSpace(cleaned))
-                    cleaned = "BaseFlame";
+            var cleaned = CleanSkin(skin);
+            if (string.IsNullOrWhiteSpace(cleaned))
+                cleaned = "BaseFlame";
 
-                ModEntry.SetRemoteHeadSkin(cleaned);
-            }
-            catch (Exception ex)
-            {
-                _log?.Warning("[NetMod] Failed to receive hero skin: {Message}", ex.Message);
-            }
+            ModEntry.SetRemoteHeadSkin(cleaned);
         }
 
         private static void SendHeroSkin(User user, NetNode? net)
