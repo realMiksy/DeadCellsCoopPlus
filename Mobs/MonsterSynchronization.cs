@@ -2,17 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using dc;
 using dc.en;
 using dc.h2d;
+using dc.libs.heaps.slib;
+using dc.libs.heaps.slib._AnimManager;
 using dc.pr;
-using dc.tool;
 using dc.tool.atk;
-using dc.tool._Cooldown;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using ModCore.Events;
 using ModCore.Modules;
+using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
@@ -48,16 +48,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             public readonly int Dir;
             public readonly int Life;
             public readonly int MaxLife;
-            public readonly string CdPayload;
+            public readonly string AnimPayload;
 
-            public ClientMobState(double x, double y, int dir, int life, int maxLife, string cdPayload)
+            public ClientMobState(double x, double y, int dir, int life, int maxLife, string animPayload)
             {
                 X = x;
                 Y = y;
                 Dir = dir;
                 Life = life;
                 MaxLife = maxLife;
-                CdPayload = cdPayload ?? string.Empty;
+                AnimPayload = animPayload ?? string.Empty;
             }
         }
 
@@ -341,198 +341,178 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             mob.setPosCase(xCase, mob.cy, xFrac, mob.yr);
         }
 
-        private static string BuildCdPayload(Mob mob)
+        private readonly struct ParsedAnimPayload
         {
-            var cooldown = mob.cd;
-            var fast = cooldown?.fastCheck;
-            if (cooldown == null || fast == null)
-                return string.Empty;
+            public readonly string Group;
+            public readonly int Frame;
+            public readonly bool Reverse;
+            public readonly double Speed;
 
-            var framesByKey = new Dictionary<int, double>();
+            public ParsedAnimPayload(string group, int frame, bool reverse, double speed)
+            {
+                Group = group ?? string.Empty;
+                Frame = frame;
+                Reverse = reverse;
+                Speed = speed;
+            }
+        }
+
+        private static AnimManager? GetMobAnimManager(Mob mob)
+        {
+            var spr = mob.spr;
+            if (spr == null)
+                return null;
+
             try
             {
-                var keys = fast.keys();
-                while (keys != null && keys.hasNext.Invoke())
+                return spr._animManager ?? spr.get_anim();
+            }
+            catch
+            {
+                return spr._animManager;
+            }
+        }
+
+        private static AnimInstance? GetTopAnimInstance(AnimManager? animManager)
+        {
+            var stack = animManager?.stack;
+            if (stack == null || stack.length <= 0)
+                return null;
+
+            try
+            {
+                return stack.getDyn(0) as AnimInstance;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string BuildAnimPayload(Mob mob)
+        {
+            var spr = mob.spr;
+            if (spr == null)
+                return string.Empty;
+
+            var group = spr.groupName?.ToString() ?? string.Empty;
+            var frame = System.Math.Max(0, spr.frame);
+            var reverse = false;
+            var speed = 1.0;
+
+            try
+            {
+                var animManager = GetMobAnimManager(mob);
+                var top = GetTopAnimInstance(animManager);
+                if (top != null)
                 {
-                    var keyObj = keys.next.Invoke();
-                    var key = ReadCooldownKey(keyObj);
-                    var rawValue = fast.get(keyObj);
-                    if (!TryReadCooldownFrames(rawValue, out double frames))
-                        continue;
-                    framesByKey[key] = System.Math.Max(0.0, frames);
+                    if (!string.IsNullOrWhiteSpace(top.group?.ToString()))
+                        group = top.group.ToString();
+                    reverse = top.reverse;
+                    if (top.speed > 0.0)
+                        speed = top.speed;
                 }
             }
             catch
             {
             }
 
-            if (framesByKey.Count == 0)
-            {
-                var cdByKey = BuildCdInstMap(cooldown);
-                foreach (var kv in cdByKey)
-                    framesByKey[kv.Key] = System.Math.Max(0.0, kv.Value.frames);
-            }
-
-            if (framesByKey.Count == 0)
+            if (string.IsNullOrWhiteSpace(group))
                 return string.Empty;
 
-            var sortedKeys = new List<int>(framesByKey.Keys);
-            sortedKeys.Sort();
-
-            var payload = new StringBuilder();
-            foreach (var key in sortedKeys)
-            {
-                if (!framesByKey.TryGetValue(key, out var frames))
-                    continue;
-
-                if (payload.Length > 0)
-                    payload.Append('|');
-
-                payload.Append(key.ToString(CultureInfo.InvariantCulture));
-                payload.Append('=');
-                payload.Append(frames.ToString("R", CultureInfo.InvariantCulture));
-            }
-
-            return payload.ToString();
-        }
-
-        private static Dictionary<int, CdInst> BuildCdInstMap(Cooldown cooldown)
-        {
-            var map = new Dictionary<int, CdInst>();
-            var cdList = cooldown.cdList;
-            if (cdList == null)
-                return map;
-
+            string encodedGroup;
             try
             {
-                for (int i = 0; i < cdList.length; i++)
-                {
-                    if (cdList.getDyn(i) is not CdInst inst)
-                        continue;
-                    map[inst.k] = inst;
-                }
+                encodedGroup = Uri.EscapeDataString(group);
             }
             catch
             {
+                encodedGroup = group;
             }
 
-            return map;
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"{encodedGroup}~{frame}~{(reverse ? 1 : 0)}~{speed:R}");
         }
 
-        private static int ReadCooldownKey(object? keyObj)
+        private static bool TryParseAnimPayload(string? payload, out ParsedAnimPayload parsed)
         {
-            try
-            {
-                return Convert.ToInt32(keyObj, CultureInfo.InvariantCulture);
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
-        private static bool TryReadCooldownFrames(object? rawValue, out double frames)
-        {
-            if (rawValue is CdInst inst)
-            {
-                frames = inst.frames;
-                return true;
-            }
-
-            try
-            {
-                frames = Convert.ToDouble(rawValue, CultureInfo.InvariantCulture);
-                return true;
-            }
-            catch
-            {
-                frames = 0.0;
-                return false;
-            }
-        }
-
-        private static Dictionary<int, double> ParseCooldownPayload(string? payload)
-        {
-            var map = new Dictionary<int, double>();
+            parsed = default;
             if (string.IsNullOrWhiteSpace(payload))
-                return map;
+                return false;
 
-            var entries = payload.Split('|', StringSplitOptions.RemoveEmptyEntries);
-            foreach (var entry in entries)
+            var parts = payload.Split('~', StringSplitOptions.None);
+            if (parts.Length < 4)
+                return false;
+
+            var encodedGroup = parts[0];
+            string group;
+            try
             {
-                var parts = entry.Split('=', StringSplitOptions.None);
-                if (parts.Length < 2)
-                    continue;
-
-                var keyPart = parts[0];
-                var framesPart = parts[1];
-
-                if (!int.TryParse(keyPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var key))
-                    continue;
-                if (!double.TryParse(framesPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var frames))
-                    continue;
-
-                map[key] = System.Math.Max(0.0, frames);
+                group = Uri.UnescapeDataString(encodedGroup);
+            }
+            catch
+            {
+                group = encodedGroup;
             }
 
-            return map;
+            if (string.IsNullOrWhiteSpace(group))
+                return false;
+            if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var frame))
+                return false;
+
+            var reverse = parts[2] == "1";
+            if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var speed))
+                speed = 1.0;
+
+            parsed = new ParsedAnimPayload(group, System.Math.Max(0, frame), reverse, System.Math.Max(0.01, speed));
+            return true;
         }
 
-        private static void ApplyCooldownPayload(Mob mob, string? payload)
+        private static void ApplyAnimPayload(Mob mob, string? payload)
         {
-            var cooldown = mob.cd;
-            var fast = cooldown?.fastCheck;
-            if (cooldown == null || fast == null)
+            if (!TryParseAnimPayload(payload, out var parsed))
                 return;
 
-            var targetEntries = ParseCooldownPayload(payload);
-            var cdByKey = BuildCdInstMap(cooldown);
-            var existingKeys = new HashSet<int>(cdByKey.Keys);
+            var spr = mob.spr;
+            if (spr == null)
+                return;
 
-            foreach (var existingKey in existingKeys)
+            var animManager = GetMobAnimManager(mob);
+            if (animManager == null)
+                return;
+
+            try
             {
-                if (targetEntries.ContainsKey(existingKey))
-                    continue;
-
-                try
-                {
-                    fast.remove(existingKey);
-                    if (cdByKey.TryGetValue(existingKey, out var existingInst))
-                    {
-                        cooldown.cdList?.remove(existingInst);
-                        cdByKey.Remove(existingKey);
-                    }
-                }
-                catch
-                {
-                }
+                var currentGroup = spr.groupName?.ToString() ?? string.Empty;
+                if (!string.Equals(currentGroup, parsed.Group, StringComparison.Ordinal))
+                    animManager.play(parsed.Group.AsHaxeString(), null, null);
+            }
+            catch
+            {
             }
 
-            foreach (var kv in targetEntries)
+            try
             {
-                var key = kv.Key;
-                var frames = System.Math.Max(0.0, kv.Value);
-
-                try
+                var top = GetTopAnimInstance(animManager);
+                if (top != null)
                 {
-                    if (!cdByKey.TryGetValue(key, out var cdInst))
-                    {
-                        cdInst = new CdInst(key, frames);
-                        cooldown.cdList?.push(cdInst);
-                        cdByKey[key] = cdInst;
-                    }
-                    else
-                    {
-                        cdInst.frames = frames;
-                        if (cdInst.initial < frames)
-                            cdInst.initial = frames;
-                    }
+                    top.reverse = parsed.Reverse;
+                    top.speed = parsed.Speed;
+                }
+            }
+            catch
+            {
+            }
 
-                    fast.set(key, cdInst);
-                }
-                catch
-                {
-                }
+            try
+            {
+                var currentGroup = spr.groupName?.ToString() ?? string.Empty;
+                if (string.Equals(currentGroup, parsed.Group, StringComparison.Ordinal) && spr.frame != parsed.Frame)
+                    spr.setFrame(parsed.Frame);
+            }
+            catch
+            {
             }
         }
 
@@ -558,9 +538,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var dir = NormalizeDir(mob.dir);
                     var life = mob.life;
                     var maxLife = mob.maxLife;
-                    var cd = BuildCdPayload(mob);
+                    var animPayload = BuildAnimPayload(mob);
 
-                    states.Add(new NetNode.MobStateSnapshot(i, x, y, dir, life, maxLife, cd));
+                    states.Add(new NetNode.MobStateSnapshot(i, x, y, dir, life, maxLife, animPayload));
                 }
             }
 
@@ -587,7 +567,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         NormalizeDir(state.Dir),
                         state.Life,
                         state.MaxLife,
-                        state.CdPayload);
+                        state.AnimPayload);
                 }
             }
         }
@@ -717,7 +697,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (target.Life >= 0 && self.life != target.Life)
                 self.life = target.Life;
 
-            ApplyCooldownPayload(self, target.CdPayload);
+            ApplyAnimPayload(self, target.AnimPayload);
         }
 
         private static void ApplyClientAnimationStateBeforeUpdate(Mob self)
@@ -735,7 +715,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (target.Dir != 0)
                 self.dir = target.Dir;
 
-            ApplyCooldownPayload(self, target.CdPayload);
+            ApplyAnimPayload(self, target.AnimPayload);
         }
 
         private static void ConsumeIncomingMobHits(NetNode net)

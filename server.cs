@@ -180,9 +180,9 @@ public sealed class NetNode : IDisposable
         public readonly int Dir;
         public readonly int Life;
         public readonly int MaxLife;
-        public readonly string CdPayload;
+        public readonly string AnimPayload;
 
-        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string cdPayload)
+        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string animPayload)
         {
             Index = index;
             X = x;
@@ -190,7 +190,7 @@ public sealed class NetNode : IDisposable
             Dir = dir;
             Life = life;
             MaxLife = maxLife;
-            CdPayload = cdPayload ?? string.Empty;
+            AnimPayload = animPayload ?? string.Empty;
         }
     }
 
@@ -1207,9 +1207,9 @@ public sealed class NetNode : IDisposable
                 continue;
             if (!int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxLife))
                 continue;
-            var cdPayload = parts[6];
+            var animPayload = parts[6];
 
-            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, cdPayload));
+            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload));
         }
 
         return states;
@@ -1342,7 +1342,7 @@ public sealed class NetNode : IDisposable
                 sb.Append(',');
                 sb.Append(state.MaxLife.ToString(CultureInfo.InvariantCulture));
                 sb.Append(',');
-                sb.Append(state.CdPayload ?? string.Empty);
+                sb.Append(state.AnimPayload ?? string.Empty);
             }
         }
         sb.Append('\n');
