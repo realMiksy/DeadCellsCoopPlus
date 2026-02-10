@@ -7,6 +7,7 @@ using dc;
 using dc.en;
 using dc.h2d;
 using dc.pr;
+using dc.tool;
 using dc.tool.atk;
 using dc.tool._Cooldown;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
@@ -35,7 +36,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostStateSendRateHz = 20.0;
         private const double ClientInterpolationAlpha = 0.25;
         private const double ClientAiLockSeconds = 0.3;
-        private const bool ClientSyncVerticalPosition = false;
+        private static readonly bool ClientSyncVerticalPosition = false;
+        private const double PixelsPerCase = 24.0;
         private const double MaxCoordinateMatchDistance = 96.0;
         private const double MaxCoordinateMatchDistanceSq = MaxCoordinateMatchDistance * MaxCoordinateMatchDistance;
 
@@ -135,7 +137,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (isClient && IsSyncMob(self))
             {
-                // Client does not run real mob AI, it only mirrors host states.
                 TryLockMobAi(self, ClientAiLockSeconds);
             }
 
@@ -167,7 +168,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsClient(net))
                 return;
 
-            // if (!IsSyncMob(self) || IsOutOfGame(self))
             if (!IsSyncMob(self))
                 return;
 
@@ -320,39 +320,75 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return 0;
         }
 
+        private static double GetWorldX(Entity entity)
+        {
+            return (entity.cx + entity.xr) * PixelsPerCase;
+        }
+
+        private static double GetWorldY(Entity entity)
+        {
+            return (entity.cy + entity.yr) * PixelsPerCase;
+        }
+
+        private static void SetWorldXKeepingY(Mob mob, double worldX)
+        {
+            var xCase = (int)(worldX / PixelsPerCase);
+            var xFrac = (worldX - xCase * PixelsPerCase) / PixelsPerCase;
+            mob.setPosCase(xCase, mob.cy, xFrac, mob.yr);
+        }
+
         private static string BuildCdPayload(Mob mob)
         {
-            var fast = mob.cd?.fastCheck;
-            if (fast == null)
+            var cooldown = mob.cd;
+            if (cooldown == null)
                 return string.Empty;
 
+            var cdByKey = BuildCdInstMap(cooldown);
+            if (cdByKey.Count == 0)
+                return string.Empty;
+
+            var sortedKeys = new List<int>(cdByKey.Keys);
+            sortedKeys.Sort();
+
             var payload = new StringBuilder();
-            var hasAny = false;
+            foreach (var key in sortedKeys)
+            {
+                if (!cdByKey.TryGetValue(key, out var inst))
+                    continue;
+
+                var frames = (int)System.Math.Round(inst.frames);
+                if (payload.Length > 0)
+                    payload.Append('.');
+
+                payload.Append(key.ToString(CultureInfo.InvariantCulture));
+                payload.Append(':');
+                payload.Append(frames.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return payload.ToString();
+        }
+
+        private static Dictionary<int, CdInst> BuildCdInstMap(Cooldown cooldown)
+        {
+            var map = new Dictionary<int, CdInst>();
+            var cdList = cooldown.cdList;
+            if (cdList == null)
+                return map;
+
             try
             {
-                var keys = fast.keys();
-                while (keys != null && keys.hasNext.Invoke())
+                for (int i = 0; i < cdList.length; i++)
                 {
-                    var keyObj = keys.next.Invoke();
-                    var valueObj = fast.get(keyObj);
-                    var key = ReadCooldownKey(keyObj);
-                    var frames = ReadCooldownFrames(valueObj);
-
-                    if (hasAny)
-                        payload.Append('.');
-
-                    payload.Append(key.ToString(CultureInfo.InvariantCulture));
-                    payload.Append(':');
-                    payload.Append(frames.ToString(CultureInfo.InvariantCulture));
-                    hasAny = true;
+                    if (cdList.getDyn(i) is not CdInst inst)
+                        continue;
+                    map[inst.k] = inst;
                 }
             }
             catch
             {
-                return string.Empty;
             }
 
-            return payload.ToString();
+            return map;
         }
 
         private static int ReadCooldownKey(object? keyObj)
@@ -360,30 +396,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             try
             {
                 return Convert.ToInt32(keyObj, CultureInfo.InvariantCulture);
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
-        private static int ReadCooldownFrames(object? valueObj)
-        {
-            if (valueObj is CdInst inst)
-            {
-                try
-                {
-                    return (int)System.Math.Round(inst.frames);
-                }
-                catch
-                {
-                }
-            }
-
-            try
-            {
-                var raw = Convert.ToDouble(valueObj, CultureInfo.InvariantCulture);
-                return (int)System.Math.Round(raw);
             }
             catch
             {
@@ -400,12 +412,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var entries = payload.Split('.', StringSplitOptions.RemoveEmptyEntries);
             foreach (var entry in entries)
             {
-                var splitIndex = entry.IndexOf(':');
-                if (splitIndex <= 0 || splitIndex >= entry.Length - 1)
+                var parts = entry.Split(':', StringSplitOptions.None);
+                if (parts.Length < 2)
                     continue;
 
-                var keyPart = entry[..splitIndex];
-                var framesPart = entry[(splitIndex + 1)..];
+                var keyPart = parts[0];
+                var framesPart = parts[1];
 
                 if (!int.TryParse(keyPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var key))
                     continue;
@@ -426,8 +438,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             var targetEntries = ParseCooldownPayload(payload);
-
-            var existingKeys = new List<int>();
+            var cdByKey = BuildCdInstMap(cooldown);
+            var existingKeys = new HashSet<int>(cdByKey.Keys);
             try
             {
                 var keys = fast.keys();
@@ -449,10 +461,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 try
                 {
-                    var existingObj = fast.get(existingKey);
                     fast.remove(existingKey);
-                    if (existingObj is CdInst existingInst)
+                    if (cdByKey.TryGetValue(existingKey, out var existingInst))
+                    {
                         cooldown.cdList?.remove(existingInst);
+                        cdByKey.Remove(existingKey);
+                    }
                 }
                 catch
                 {
@@ -462,23 +476,24 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             foreach (var kv in targetEntries)
             {
                 var key = kv.Key;
-                var frames = kv.Value;
+                var frames = System.Math.Max(0, kv.Value);
 
                 try
                 {
-                    var existingObj = fast.get(key);
-                    if (existingObj is CdInst existingInst)
+                    if (!cdByKey.TryGetValue(key, out var cdInst))
                     {
-                        existingInst.frames = frames;
-                        if (existingInst.initial < frames)
-                            existingInst.initial = frames;
+                        cdInst = new CdInst(key, frames);
+                        cooldown.cdList?.push(cdInst);
+                        cdByKey[key] = cdInst;
                     }
                     else
                     {
-                        var newInst = new CdInst(key, frames);
-                        fast.set(key, newInst);
-                        cooldown.cdList?.push(newInst);
+                        cdInst.frames = frames;
+                        if (cdInst.initial < frames)
+                            cdInst.initial = frames;
                     }
+
+                    fast.set(key, cdInst);
                 }
                 catch
                 {
@@ -500,7 +515,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 for (int i = 0; i < trackedMobs.Count; i++)
                 {
                     var mob = trackedMobs[i];
-                    // if (mob == null || IsOutOfGame(mob))
                     if (mob == null)
                         continue;
 
@@ -620,8 +634,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
             }
 
-            var currentX = self.spr?.x ?? self.cx;
-            var currentY = self.spr?.y ?? self.cy;
+            var currentX = GetWorldX(self);
+            var currentY = GetWorldY(self);
             var lerpedX = currentX + (target.X - currentX) * ClientInterpolationAlpha;
             var lerpedY = ClientSyncVerticalPosition
                 ? currentY + (target.Y - currentY) * ClientInterpolationAlpha
@@ -629,26 +643,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                self.setPosPixel(lerpedX, lerpedY);
+                if (ClientSyncVerticalPosition)
+                    self.setPosPixel(lerpedX, lerpedY);
+                else
+                    SetWorldXKeepingY(self, lerpedX);
             }
             catch
             {
                 if (self.spr != null)
                 {
                     self.spr.x = lerpedX;
-                    self.spr.y = lerpedY;
+                    if (ClientSyncVerticalPosition)
+                        self.spr.y = lerpedY;
                 }
             }
 
-            // Client-side mobs are host-driven: zero local movement/fall integration to avoid fake death from velocity.
             try
             {
                 self.dx = 0;
                 self.bdx = 0;
-                self.dy = 0;
-                self.bdy = 0;
-                self.fallStartY = lerpedY;
-                self.hasGravity = false;
+                if (ClientSyncVerticalPosition)
+                {
+                    self.dy = 0;
+                    self.bdy = 0;
+                    self.fallStartY = lerpedY;
+                }
+                self.hasGravity = true;
             }
             catch
             {
@@ -675,7 +695,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 foreach (var hit in hits)
                 {
                     var mob = ResolveMobFromHitLocked(hit);
-                    // if (mob == null || IsOutOfGame(mob))
                     if (mob == null)
                         continue;
 
@@ -706,7 +725,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (hit.MobIndex >= 0 && hit.MobIndex < trackedMobs.Count)
             {
                 var byIndex = trackedMobs[hit.MobIndex];
-                // if (byIndex != null && !IsOutOfGame(byIndex))
                 if (byIndex != null)
                 {
                     var idxX = byIndex.spr?.x ?? byIndex.cx;
@@ -724,7 +742,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             for (int i = 0; i < trackedMobs.Count; i++)
             {
                 var mob = trackedMobs[i];
-                // if (mob == null || IsOutOfGame(mob))
                 if (mob == null)
                     continue;
 
