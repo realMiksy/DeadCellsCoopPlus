@@ -1527,8 +1527,14 @@ namespace DeadCellsMultiplayerMod
 
         public void StopNetworkFromMenu()
         {
+            var roleBeforeStop = _netRole;
             try
             {
+                if (roleBeforeStop == NetRole.Client)
+                    Logger.Information("[NetMod] Disconnecting client from host...");
+                else if (roleBeforeStop == NetRole.Host)
+                    Logger.Information("[NetMod] Disposing host server...");
+
                 _net?.Dispose();
             }
             catch { }
@@ -1536,6 +1542,7 @@ namespace DeadCellsMultiplayerMod
             _netRole = NetRole.None;
             GameMenu.NetRef = null;
             GameMenu.SetRole(_netRole);
+            ConnectionUI.NotifyConnectionsChanged();
         }
 
 

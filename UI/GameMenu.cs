@@ -481,6 +481,7 @@ namespace DeadCellsMultiplayerMod
             bool? isEnable,
             Ref<int> color)
         {
+            cb = WrapQuitCallbackIfNeeded(str, cb);
             var ret = orig(self, str, cb, help, isEnable, color);
 
             try
@@ -508,6 +509,69 @@ namespace DeadCellsMultiplayerMod
             }
 
             return ret;
+        }
+
+        private static HlAction WrapQuitCallbackIfNeeded(dc.String label, HlAction callback)
+        {
+            if (callback == null)
+                return callback;
+
+            if (_role == NetRole.None)
+                return callback;
+
+            var text = label?.ToString() ?? string.Empty;
+            if (!IsQuitMenuLabel(text))
+                return callback;
+
+            return new HlAction(() =>
+            {
+                try
+                {
+                    StopNetworkFromMenu();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Quit cleanup failed: {Message}", ex.Message);
+                }
+
+                try
+                {
+                    callback();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Warning("[NetMod] Quit callback failed: {Message}", ex.Message);
+                }
+            });
+        }
+
+        private static bool IsQuitMenuLabel(string label)
+        {
+            if (string.IsNullOrWhiteSpace(label))
+                return false;
+
+            var text = label.Trim();
+            if (text.IndexOf("quit", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("exit", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("выйт", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (text.IndexOf("выход", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            try
+            {
+                var localizedQuit = GetText.Instance.GetString("Quitter le jeu");
+                if (!string.IsNullOrWhiteSpace(localizedQuit) &&
+                    string.Equals(text, localizedQuit, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private static void ShowMultiplayerMenu(TitleScreen screen)
