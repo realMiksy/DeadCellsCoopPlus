@@ -287,6 +287,12 @@ public sealed class NetNode : IDisposable
 
     private readonly object _sync = new();
     private bool _hasRemote;
+    private bool _hasLocalHpSnapshot;
+    private int _localHpLife;
+    private int _localHpMaxLife;
+    private int _localHpLif;
+    private int _localHpBonusLife;
+    private int _localHpRecover;
 
     public bool HasRemote
     {
@@ -423,6 +429,8 @@ public sealed class NetNode : IDisposable
                 });
                 await SendLineToClientSafe(connection, $"ID|{assignedId}\n").ConfigureAwait(false);
                 await SendKnownUsersToClientSafe(connection).ConfigureAwait(false);
+                if (_role == NetRole.Host && TryBuildLocalHpLine(out var localHpLine))
+                    await SendLineToClientSafe(connection, localHpLine).ConfigureAwait(false);
 
                 _ = Task.Run(() => RecvLoop(connection.Stream, ct, assignedId, connection));
             }
@@ -1559,6 +1567,22 @@ public sealed class NetNode : IDisposable
         return $"HP|{id}|{life}|{maxLife}|{lif}|{bonusLife}|{recover}\n";
     }
 
+    private bool TryBuildLocalHpLine(out string line)
+    {
+        lock (_sync)
+        {
+            if (!_hasLocalHpSnapshot)
+            {
+                line = string.Empty;
+                return false;
+            }
+
+            var senderId = ID > 0 ? ID : 1;
+            line = BuildHpLine(senderId, _localHpLife, _localHpMaxLife, _localHpLif, _localHpBonusLife, _localHpRecover);
+            return true;
+        }
+    }
+
     private static string BuildMobStatesLine(IReadOnlyList<MobStateSnapshot> states)
     {
         var sb = new StringBuilder("MOBSTATE|");
@@ -1850,6 +1874,16 @@ public sealed class NetNode : IDisposable
 
     public void SendHP(double life, double maxLife, double lif, double bonusLife, double recover)
     {
+        lock (_sync)
+        {
+            _localHpLife = (int)System.Math.Round(life, System.MidpointRounding.AwayFromZero);
+            _localHpMaxLife = (int)System.Math.Round(maxLife, System.MidpointRounding.AwayFromZero);
+            _localHpLif = (int)System.Math.Round(lif, System.MidpointRounding.AwayFromZero);
+            _localHpBonusLife = (int)System.Math.Round(bonusLife, System.MidpointRounding.AwayFromZero);
+            _localHpRecover = (int)System.Math.Round(recover, System.MidpointRounding.AwayFromZero);
+            _hasLocalHpSnapshot = true;
+        }
+
         if (!HasAnyConnection())
         {
             return;

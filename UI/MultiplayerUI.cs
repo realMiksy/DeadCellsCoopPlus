@@ -58,6 +58,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         private dc.h2d.Flow toplib { get; set; } = null!;
         public static dc.h2d.Flow flowContainer = null!;
         private static NetNode? _net;
+        private NetNode? _boundNet;
         public int SlotIndex { get; set; }
 
         private LifeSlot?[] _slots = System.Array.Empty<LifeSlot?>();
@@ -66,6 +67,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
 
         private int lastLife = 0;
         private int lastMaxLife = 0;
+        private int _lastHostConnectedClientCount = -1;
 
         public MultiplayerUI(ModEntry Entry, int slotIndex = 0)
         {
@@ -166,7 +168,42 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         {
             _net = ModEntry._net;
             var net = _net;
-            if (net == null) return;
+            if (net == null)
+            {
+                if (_boundNet != null)
+                {
+                    _boundNet = null;
+                    lastLife = int.MinValue;
+                    lastMaxLife = int.MinValue;
+                    _lastHostConnectedClientCount = -1;
+                    ClearSlots();
+                }
+                return;
+            }
+
+            if (!ReferenceEquals(_boundNet, net))
+            {
+                _boundNet = net;
+                lastLife = int.MinValue;
+                lastMaxLife = int.MinValue;
+                _lastHostConnectedClientCount = -1;
+                ClearSlots();
+            }
+
+            if (net.IsHost)
+            {
+                var connectedClients = NetNode.ConnectedClientCount;
+                if (connectedClients != _lastHostConnectedClientCount)
+                {
+                    _lastHostConnectedClientCount = connectedClients;
+                    lastLife = int.MinValue;
+                    lastMaxLife = int.MinValue;
+                }
+            }
+            else
+            {
+                _lastHostConnectedClientCount = -1;
+            }
 
 
             if (lastLife != self.life || lastMaxLife != self.maxLife)
@@ -496,6 +533,9 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             UpdateSystemMessages(dt);
+            var hero = ModEntry.me;
+            if (hero != null)
+                KingLifeUpdate(hero);
             Debugkeys();
         }
     }

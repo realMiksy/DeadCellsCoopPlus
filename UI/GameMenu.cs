@@ -918,9 +918,42 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                GetTitleScreen()?.mainMenu();
+                var boot = dc.Boot.Class?.ME;
+                if (boot != null)
+                {
+                    boot.returnToMainMenu();
+                    return;
+                }
             }
-            catch { _log.Debug("Cant mainMenu"); }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Boot.returnToMainMenu failed: {Message}", ex.Message);
+            }
+
+            try
+            {
+                var titleScreen = GetTitleScreen();
+                if (titleScreen != null)
+                {
+                    titleScreen.mainMenu();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] TitleScreen.mainMenu failed: {Message}", ex.Message);
+            }
+
+            try
+            {
+                var main = dc.Main.Class?.ME;
+                if (main != null)
+                    _ = main.onExit();
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod] Main.onExit fallback failed: {Message}", ex.Message);
+            }
         }
 
         private static void ShowHostStatusMenu(TitleScreen screen)
