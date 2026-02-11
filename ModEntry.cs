@@ -120,9 +120,7 @@ namespace DeadCellsMultiplayerMod
             if (instance == null)
                 return;
 
-            instance.remoteHeadSkin = string.IsNullOrWhiteSpace(skin)
-                ? "BaseFlame"
-                : skin.Replace("|", "/").Trim();
+            instance.remoteHeadSkin = NormalizeHeadSkin(skin);
         }
 
         public static string GetClientLabel(int slotIndex)
@@ -950,21 +948,15 @@ namespace DeadCellsMultiplayerMod
                 }
                 clients[i] = _ghost.CreateGhostKing(me._level);
 
-                bool fromUI = false;
-                var newHead = new Kinghead(me, clients[i], me._level, Logger);
-                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
-
-                clientHeads[i] = newHead;
-                clients[i].head = newHead;
-
                 var knownSkin = clientSkins[i];
                 if (!string.IsNullOrWhiteSpace(knownSkin))
                     clients[i].ApplyRemoteSkin(knownSkin);
                 var knownHead = clientHeadSkins[i];
-                if (!string.IsNullOrWhiteSpace(knownHead))
-                {
-                    clients[i].RemoteHeadSkinId = knownHead;
-                }
+                clients[i].RemoteHeadSkinId = NormalizeHeadSkin(
+                    !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
+                );
+
+                RecreateClientHead(i);
 
                 rLastX[i] = 0;
                 rLastY[i] = 0;
@@ -1110,14 +1102,60 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = string.IsNullOrWhiteSpace(skin)
-                ? "BaseFlame"
-                : skin.Replace("|", "/").Trim();
+            var cleaned = NormalizeHeadSkin(skin);
+            var prev = clientHeadSkins[index];
             clientHeadSkins[index] = cleaned;
 
             var client = clients[index];
             if (client != null)
                 client.RemoteHeadSkinId = cleaned;
+
+            if (!string.Equals(prev, cleaned, StringComparison.Ordinal) || client?.head == null)
+                instance.RecreateClientHead(index);
+        }
+
+        private static string NormalizeHeadSkin(string? skin)
+        {
+            return string.IsNullOrWhiteSpace(skin)
+                ? "BaseFlame"
+                : skin.Replace("|", "/").Trim();
+        }
+
+        private void RecreateClientHead(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            var client = clients[slot];
+            if (client == null || me == null || me._level == null)
+                return;
+
+            var existing = clientHeads[slot];
+            if (existing != null)
+            {
+                existing.dispose();
+                clientHeads[slot] = null;
+            }
+
+            var desiredHead = NormalizeHeadSkin(client.RemoteHeadSkinId);
+            var previousGlobalHead = remoteHeadSkin;
+            remoteHeadSkin = desiredHead;
+            try
+            {
+                bool fromUI = false;
+                var newHead = new Kinghead(me, client, me._level, Logger);
+                newHead.init(me._level, null, Ref<bool>.From(ref fromUI));
+                clientHeads[slot] = newHead;
+                client.head = newHead;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to recreate client head slot {slot}: {msg}", slot, ex.Message);
+            }
+            finally
+            {
+                remoteHeadSkin = previousGlobalHead;
+            }
         }
 
         private void ReceiveGhostCoords()

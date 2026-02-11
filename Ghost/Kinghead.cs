@@ -53,84 +53,122 @@ namespace DeadCellsMultiplayerMod.KingHead
         {
         }
 
+        // public new void customHeadFx()
+        // {
+        //     var data = this.forcedCustomHead ?? this._customHeadInfoCache;
+        //     if (data?.particleEffects == null)
+        //         return;
+
+        //     var arr = data.particleEffects;
+        //     for (int i = arr.length - 1; i >= 0; i--)
+        //     {
+        //         if (arr.getDyn(i) == null)
+        //             arr.splice(i, 1);
+        //     }
+
+        //     if (arr.length == 0)
+        //         return;
+
+        //     base.customHeadFx();
+        // }
+
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {
             var headSprite = king?.spr;
-            var remoteHeadSkin = ModEntry.Instance?.remoteHeadSkin;
-            if (remoteHeadSkin == null) remoteHeadSkin = "baseFlame";
-            var allHeads = ModEntry.customHeads;
-
-            for (int i = 0; i < allHeads.array.length; i++)
+            var remoteHeadSkin = ModEntry.Instance!.remoteHeadSkin;
+            if (remoteHeadSkin == null) remoteHeadSkin = "BaseFlame";
+            for(int i=0; i < ModEntry.customHeads.array.length; i++)
             {
-                var cHead = allHeads.getDyn(i);
-                if (cHead.item.ToString() == remoteHeadSkin)
+                var cHead = ModEntry.customHeads.getDyn(i);
+                if(cHead.item.ToString() == remoteHeadSkin)
                 {
                     var data = new Hashlink.Virtuals.virtual_atlas_glowData_item_particleEffects_properties_();
                     this.customHead = true;
                     data.atlas = "customHead".AsHaxeString();
 
                     var glowData = ArrayUtils.CreateDyn();
-                    var glowDataNone = ArrayUtils.CreateDyn();
+                    var glowData_none = ArrayUtils.CreateDyn();
                     glowData.array.pushDyn(cHead.glowData.getDyn(0));
-                    if (((ArrayObj)glowData.array).getDyn(0) == null)
-                        data.glowData = (ArrayObj)glowDataNone.array;
-                    else
-                        data.glowData = (ArrayObj)glowData.array;
-
+                    if(((ArrayObj)glowData.array).getDyn(0) == null) data.glowData = (ArrayObj)glowData_none.array;
+                    else data.glowData = (ArrayObj)glowData.array;
+                    
                     data.item = remoteHeadSkin.AsHaxeString();
                     var particleEffects = ArrayUtils.CreateDyn();
                     particleEffects.array.pushDyn(cHead.particleEffects.getDyn(0));
-                    var particleEffectsNone = ArrayUtils.CreateDyn();
-                    if (((ArrayObj)particleEffects.array).getDyn(0) == null)
-                        data.particleEffects = (ArrayObj)particleEffectsNone.array;
-                    else
-                        data.particleEffects = (ArrayObj)particleEffects.array;
-
+                    var particleEffects_none = ArrayUtils.CreateDyn();
+                    if(((ArrayObj)particleEffects.array).getDyn(0) == null) data.particleEffects = (ArrayObj)particleEffects_none.array;
+                    else data.particleEffects = (ArrayObj)particleEffects.array;
                     var properties = ArrayUtils.CreateDyn();
-                    for (int b = 0; b < cHead.properties.length; b++)
+                    for (int b=0; b < cHead.properties.length; b++)
+                    {
                         properties.array.pushDyn(cHead.properties.getDyn(b));
-                    data.properties = (ArrayObj)properties.array;
-
+                    }
+                    data.properties = (ArrayObj)properties.array; 
                     this.forcedCustomHead = data;
                     this._customHeadInfoCache = data;
 
-                _log.Debug($"{king?.RemoteHeadSkinId}|{ModEntry.Instance?.remoteHeadSkin}");
-                if (headSprite != null)
-                {
-                    headMaterial = headSprite.frameData?.tile;
-                    headSkeleton = ResolveHeadSkeleton(headSprite);
-                    var useLocal = UseLocalSpace();
-                    if (useLocal)
-                    {
-                        headContainer = new dc.h2d.Object(headSprite);
-                        headParticleContainer = new dc.h2d.Object(headContainer);
-                    }
-                    else
-                    {
-                        headContainer = null;
-                        headParticleContainer = new dc.h2d.Object(fromUI);
-                    }
-                    base.init(parent, headParticleContainer, fromUI1);
-                    this.heroHasHead = true;
-                    this.alwaysShowHead = true;
-                    this.alwaysShowEye = true;
-                    return;
                 }
-                base.init(parent, fromUI, fromUI1);
+            }
+            if (headSprite != null)
+            {
+                headMaterial = headSprite.frameData?.tile;
+                headSkeleton = ResolveHeadSkeleton(headSprite);
+                var useLocal = UseLocalSpace();
+                if (useLocal)
+                {
+                    headContainer = new dc.h2d.Object(headSprite);
+                    headParticleContainer = new dc.h2d.Object(headContainer);
+                }
+                else
+                {
+                    headContainer = null;
+                    headParticleContainer = new dc.h2d.Object(fromUI);
+                }
+                base.init(parent, headParticleContainer, fromUI1);
+                RebuildHeadParticles(headParticleContainer, headMaterial);
                 this.heroHasHead = true;
                 this.alwaysShowHead = true;
                 this.alwaysShowEye = true;
+                return;
             }
-            }
+            base.init(parent, fromUI, fromUI1);
+            this.heroHasHead = true;
+            this.alwaysShowHead = true;
+            this.alwaysShowEye = true;
         }
 
-        public override void updateHeadFx(double c1)
+        private void RebuildHeadParticles(dc.h2d.Object particleParent, dc.h2d.Tile? material)
         {
-            if (king == null)
+            if (material == null)
             {
                 return;
             }
-            if (this.headNormalSb == null || this.headAddSb == null)
+
+            if (this.pool != null)
+            {
+                this.pool.dispose();
+            }
+            this.pool = new ParticlePool(material, 100, 30);
+
+            if (this.headNormalSb != null && this.headNormalSb.parent != null)
+            {
+                this.headNormalSb.parent.removeChild(this.headNormalSb);
+            }
+            if (this.headAddSb != null && this.headAddSb.parent != null)
+            {
+                this.headAddSb.parent.removeChild(this.headAddSb);
+            }
+
+            this.headNormalSb = new HSpriteBatch(material, particleParent);
+            this.headNormalSb.hasRotationScale = true;
+
+            this.headAddSb = new HSpriteBatch(material, particleParent);
+            this.headAddSb.hasRotationScale = true;
+            this.headAddSb.blendMode = new dc.h2d.BlendMode.Add();
+        }
+        public override void updateHeadFx(double c1)
+        {
+            if (king == null)
             {
                 return;
             }
