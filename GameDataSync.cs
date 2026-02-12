@@ -51,6 +51,10 @@ namespace DeadCellsMultiplayerMod
         private static readonly object _levelSeedLock = new();
         private static string? _remoteLevelId;
         private static double? _remoteLevelSeed;
+        private static readonly object _serializerSyncLock = new();
+        private static int _remoteSerializerSeq;
+        private static int _remoteSerializerUid;
+        private static bool _hasRemoteSerializerSync;
         public GameDataSync(Serilog.ILogger log)
         {
             _log = log;
@@ -83,10 +87,12 @@ namespace DeadCellsMultiplayerMod
             {
                 Seed = GameMenu.ForceGenerateServerSeed("NewGame_hook");
                 SendBossRune(self, net);
+                SendSerializerSync(net);
                 net.SendSeed(Seed);
             }
             else if (net != null)
             {
+                TryApplyRemoteSerializerSync();
                 if (!string.IsNullOrEmpty(_remoteCountersPayload))
                     ReceiveCounters(_remoteCountersPayload, self);
                 if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
@@ -493,7 +499,78 @@ namespace DeadCellsMultiplayerMod
             if (net == null || !net.IsAlive || rng == null || string.IsNullOrWhiteSpace(levelId))
                 return;
 
+            SendSerializerSync(net);
             net.SendLevelSeed(levelId, rng.seed);
+        }
+
+        public static void ReceiveSerializerSync(string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+                return;
+
+            var parts = payload.Split('|');
+            if (parts.Length < 2)
+                return;
+
+            if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var seq))
+                return;
+            if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var uid))
+                return;
+
+            lock (_serializerSyncLock)
+            {
+                _remoteSerializerSeq = seq;
+                _remoteSerializerUid = uid;
+                _hasRemoteSerializerSync = true;
+            }
+        }
+
+        public static bool TryApplyRemoteSerializerSync()
+        {
+            int seq;
+            int uid;
+            lock (_serializerSyncLock)
+            {
+                if (!_hasRemoteSerializerSync)
+                    return false;
+
+                seq = _remoteSerializerSeq;
+                uid = _remoteSerializerUid;
+                _hasRemoteSerializerSync = false;
+            }
+
+            try
+            {
+                var serializerClass = dc.hxbit.Serializer.Class;
+                if (serializerClass == null)
+                    return false;
+
+                serializerClass.SEQ = seq;
+                serializerClass.UID = uid;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void SendSerializerSync(NetNode? net)
+        {
+            if (net == null || !net.IsAlive || !net.IsHost)
+                return;
+
+            try
+            {
+                var serializerClass = dc.hxbit.Serializer.Class;
+                if (serializerClass == null)
+                    return;
+
+                net.SendSerializerSync(serializerClass.SEQ, serializerClass.UID);
+            }
+            catch
+            {
+            }
         }
 
         public static void ReceiveCounters(string payload, User? target = null)

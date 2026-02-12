@@ -815,7 +815,10 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.Host)
                 GameDataSync.SendLevelSeed(levelId, rng, net);
             else if (_netRole == NetRole.Client)
+            {
+                GameDataSync.TryApplyRemoteSerializerSync();
                 GameDataSync.TryApplyRemoteLevelSeed(levelId, rng);
+            }
             return orig(user, l, rng);
         }
 

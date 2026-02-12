@@ -714,6 +714,14 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("HXSYNC|", StringComparison.Ordinal))
+        {
+            var payload = line["HXSYNC|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveSerializerSync(payload);
+            return true;
+        }
+
         if (line.StartsWith("COUNTERS|"))
         {
             var payload = line["COUNTERS|".Length..];
@@ -1950,6 +1958,19 @@ public sealed class NetNode : IDisposable
         var line = $"SEED|{seed}\n";
         _ = SendLineSafe(line);
         _log.Information("[NetNode] Sent seed {Seed}", seed);
+    }
+
+    public void SendSerializerSync(int seq, int uid)
+    {
+        if (_role != NetRole.Host)
+            return;
+        if (!HasAnyConnection())
+            return;
+
+        var line = string.Create(
+            CultureInfo.InvariantCulture,
+            $"HXSYNC|{seq}|{uid}\n");
+        _ = SendLineSafe(line);
     }
 
     public void SendCounters(string countersPayload)
