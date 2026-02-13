@@ -3,6 +3,8 @@ using dc.tool;
 using dc.tool.hero;
 using dc.tool.weap;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
+using HaxeProxy.Runtime;
+using ModCore.Utilities;
 using System.Diagnostics;
 
 namespace DeadCellsMultiplayerMod.Ghost
@@ -85,17 +87,22 @@ namespace DeadCellsMultiplayerMod.Ghost
                 if(_shieldActive && !weapon.destroyed)
                 {
                     // Keep the shield logic running while we receive pulses; when pulses stop, release.
+                    if(weapon is BaseShield shield)
+                    {
+                        try { shield.onShieldHolding(1.0); } catch { }
+                    }
+
                     weapon.fixedUpdate();
                     weapon.postUpdate();
 
                     var sincePulse = now - _shieldLastPulseTicks;
-                    var releaseAfter = (long)(Stopwatch.Frequency * 0.18);
+                    var releaseAfter = (long)(Stopwatch.Frequency * 0.22);
                     if(_shieldLastPulseTicks != 0 && sincePulse > releaseAfter)
                     {
-                        if(weapon is BaseShield shield)
+                        if(weapon is BaseShield shieldToRelease)
                         {
-                            try { shield.tryToCancel(false); } catch { }
-                            try { shield.onShieldReleased(); } catch { }
+                            try { shieldToRelease.tryToCancel(false); } catch { }
+                            try { shieldToRelease.onShieldReleased(); } catch { }
                         }
 
                         try { weapon.interrupt(); } catch { }
@@ -105,6 +112,7 @@ namespace DeadCellsMultiplayerMod.Ghost
                         _shieldLastPulseTicks = 0;
                         _shieldIgnorePulsesUntilTicks = now + (long)(Stopwatch.Frequency * 0.25);
                         ClearShieldAffects();
+                        try { king.spr?._animManager?.play("idle".AsHaxeString(), null, null)?.loop(null); } catch { }
                     }
                 }
 

@@ -71,6 +71,7 @@ internal static class KingWeaponHooks
         Hook_BaseShield.counterBullet += Hook_BaseShield_counterBullet;
 
         Hook_Ammo.startMagnet += Hook_Ammo_startMagnet;
+        Hook_Ammo.postUpdate += Hook_Ammo_postUpdate;
         Hook_Ammo.retrieve += Hook_Ammo_retrieve;
         Hook_Ammo.pickUp += Hook_Ammo_pickUp;
     }
@@ -556,6 +557,12 @@ internal static class KingWeaponHooks
         orig(self, e);
     }
 
+    private static void Hook_Ammo_postUpdate(Hook_Ammo.orig_postUpdate orig, Ammo self)
+    {
+        orig(self);
+        TryCleanupReturnedAmmo(self);
+    }
+
     private static void Hook_Ammo_retrieve(Hook_Ammo.orig_retrieve orig, Ammo self, Hero h)
     {
         orig(self, h);
@@ -596,5 +603,94 @@ internal static class KingWeaponHooks
             return false;
 
         return true;
+    }
+
+    private static void TryCleanupReturnedAmmo(Ammo? ammo)
+    {
+        if(ammo == null)
+            return;
+        if(!TryGetAmmoSource(ammo, out var source) || source == null)
+            return;
+
+        try
+        {
+            if(ammo.destroyed || ammo.life <= 0)
+                return;
+        }
+        catch
+        {
+            return;
+        }
+
+        bool magneting;
+        Entity magnetTarget;
+        try
+        {
+            magneting = ammo.magneting;
+            magnetTarget = ammo.magnetedTo;
+        }
+        catch
+        {
+            return;
+        }
+
+        if(!magneting || magnetTarget == null || !ReferenceEquals(magnetTarget, source))
+            return;
+        if(source.destroyed || source.life <= 0)
+            return;
+
+        double ammoX;
+        double ammoY;
+        double srcX;
+        double srcY;
+        try
+        {
+            ammoX = ((double)ammo.cx + ammo.xr) * 24.0;
+            ammoY = ((double)ammo.cy + ammo.yr) * 24.0 - ammo.hei * 0.5;
+            srcX = ((double)source.cx + source.xr) * 24.0;
+            srcY = ((double)source.cy + source.yr) * 24.0 - source.hei * 0.5;
+        }
+        catch
+        {
+            return;
+        }
+
+        var dx = srcX - ammoX;
+        var dy = srcY - ammoY;
+
+        double pickDist;
+        try
+        {
+            pickDist = ammo.pickDist;
+        }
+        catch
+        {
+            pickDist = 12.0;
+        }
+
+        if(pickDist < 8.0)
+            pickDist = 8.0;
+
+        var reach = pickDist + 8.0;
+        if(dx * dx + dy * dy > reach * reach)
+            return;
+
+        try { ammo.pickUpByEntity(source); } catch { }
+
+        bool stillAlive;
+        try
+        {
+            stillAlive = !ammo.destroyed && ammo.life > 0;
+        }
+        catch
+        {
+            stillAlive = false;
+        }
+
+        if(stillAlive)
+        {
+            try { ammo.vanish(); } catch { }
+            try { ammo.destroy(); } catch { }
+        }
     }
 }

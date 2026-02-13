@@ -206,7 +206,6 @@ namespace DeadCellsMultiplayerMod
             Hook_User.serialize += Hook_User_serialize;
             Hook_User.unserialize += Hook_User_unserialize;
             Hook_AnimManager.play += Hook_AnimManager_play;
-            Hook_AnimManager.stopWithStateAnims += Hook_AnimManager_stopWithStateAnims;
             Hook_MiniMap.track += Hook_MiniMap_track;
             Hook__LevelStruct.get += Hook__LevelStruct_get;
             Hook_Boot.update += hook_boot_update;
@@ -854,51 +853,6 @@ namespace DeadCellsMultiplayerMod
             return orig(self, plays, queueAnim, g);
         }
 
-        private void Hook_AnimManager_stopWithStateAnims(Hook_AnimManager.orig_stopWithStateAnims orig, AnimManager self)
-        {
-            orig(self);
-
-            if(_netRole == NetRole.None)
-                return;
-            if(DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext)
-                return;
-
-            if(me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
-            {
-                string anim = "idle";
-                try
-                {
-                    var group = me.spr.groupName;
-                    if(group != null)
-                        anim = group.ToString();
-                }
-                catch
-                {
-                    anim = "idle";
-                }
-
-                anim = SanitizeRemoteBaseAnim(anim);
-                if(!string.IsNullOrWhiteSpace(anim))
-                    SendHeroAnim(anim, null, null, force: false);
-            }
-        }
-
-        private static string SanitizeRemoteBaseAnim(string anim)
-        {
-            if(string.IsNullOrWhiteSpace(anim))
-                return "idle";
-
-            var a = anim.Trim();
-            if(string.IsNullOrWhiteSpace(a))
-                return "idle";
-
-            if(IsAttackAnim(a))
-                return "idle";
-            if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "idle";
-
-            return a;
-        }
 
         private static bool IsAttackAnim(string anim)
         {
@@ -1281,7 +1235,6 @@ namespace DeadCellsMultiplayerMod
                     try { client.removeAllAffects(99); } catch { }
                 }
 
-                try { animManager.stopWithStateAnims(); } catch { }
                 animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
                 return;
             }
