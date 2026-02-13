@@ -73,18 +73,6 @@ public partial class ModEntry
             return;
 
         var isShield = IsShieldWeaponKind(kindId!);
-        if(!isShield)
-        {
-            try
-            {
-                if(!self.isReady())
-                    return;
-            }
-            catch
-            {
-                // If readiness check fails, keep legacy behavior and still send.
-            }
-        }
 
         var slot = ResolveWeaponSlotForSend(me.inventory, item, kindId!);
         if(slot < 0)
@@ -139,6 +127,39 @@ public partial class ModEntry
         var ammo = GetWeaponAmmoForSync(item);
         _net?.SendAttack(kindId!, slot, item.permanentId, ammo);
         _lastLocalShieldPulseTicks = now;
+    }
+
+    internal void NotifyLocalBowShotFromKingWeaponHooks(BaseBow self)
+    {
+        if(_netRole == NetRole.None || self == null || me == null)
+            return;
+        if(!ReferenceEquals(self.owner, me))
+            return;
+
+        NotifyLocalAmmoChangedFromKingWeaponHooks(self.item);
+    }
+
+    internal void NotifyLocalAmmoChangedFromKingWeaponHooks(InventItem? item)
+    {
+        if(_netRole == NetRole.None || item == null || me == null)
+            return;
+
+        if(!TryGetWeaponKindId(item, out var kindId) || string.IsNullOrWhiteSpace(kindId))
+            return;
+
+        var inv = me.inventory;
+        if(inv == null)
+            return;
+
+        var slot = ResolveWeaponSlotForSend(inv, item, kindId!);
+        if(slot < 0)
+        {
+            SendEquippedWeapons(inv);
+            return;
+        }
+
+        var ammo = GetWeaponAmmoForSync(item);
+        _net?.SendInventoryWeapon(kindId!, slot, item.permanentId, ammo);
     }
 
     private static bool IsShieldWeaponKind(string kindId)

@@ -1,6 +1,7 @@
 using System;
 using dc;
 using dc.en;
+using dc.en.loot;
 using dc.h2d;
 using dc.hl.types;
 using dc.tool;
@@ -68,6 +69,10 @@ internal static class KingWeaponHooks
         Hook_BaseShield.onShieldCounterSuccessful += Hook_BaseShield_onShieldCounterSuccessful;
         Hook_BaseShield.counterGrenade += Hook_BaseShield_counterGrenade;
         Hook_BaseShield.counterBullet += Hook_BaseShield_counterBullet;
+
+        Hook_Ammo.startMagnet += Hook_Ammo_startMagnet;
+        Hook_Ammo.retrieve += Hook_Ammo_retrieve;
+        Hook_Ammo.pickUp += Hook_Ammo_pickUp;
     }
 
     private static InventItem Hook_Inventory_add(Hook_Inventory.orig_add orig, Inventory self, InventItem i)
@@ -336,6 +341,7 @@ internal static class KingWeaponHooks
             return;
         }
         orig(self, entity);
+        ModEntry.Instance?.NotifyLocalBowShotFromKingWeaponHooks(self);
     }
 
     private static void Hook_BaseBow_dynamicChargeExecute(Hook_BaseBow.orig_dynamicChargeExecute orig, BaseBow self)
@@ -537,5 +543,58 @@ internal static class KingWeaponHooks
                 try { return orig(self, sourceAtk, cBullet, fullParry); } catch { return cBullet; }
             });
         return orig(self, sourceAtk, cBullet, fullParry);
+    }
+
+    private static void Hook_Ammo_startMagnet(Hook_Ammo.orig_startMagnet orig, Ammo self, Entity e)
+    {
+        if(TryGetAmmoSource(self, out var source) && source != null && ModEntry.me != null && ReferenceEquals(e, ModEntry.me))
+        {
+            orig(self, source);
+            return;
+        }
+
+        orig(self, e);
+    }
+
+    private static void Hook_Ammo_retrieve(Hook_Ammo.orig_retrieve orig, Ammo self, Hero h)
+    {
+        orig(self, h);
+        if(ModEntry.me != null && ReferenceEquals(h, ModEntry.me))
+            ModEntry.Instance?.NotifyLocalAmmoChangedFromKingWeaponHooks(self?.item);
+    }
+
+    private static void Hook_Ammo_pickUp(Hook_Ammo.orig_pickUp orig, Ammo self, Hero h)
+    {
+        orig(self, h);
+        if(ModEntry.me != null && ReferenceEquals(h, ModEntry.me))
+            ModEntry.Instance?.NotifyLocalAmmoChangedFromKingWeaponHooks(self?.item);
+    }
+
+    private static bool TryGetAmmoSource(Ammo? ammo, out KingSkin source)
+    {
+        source = null!;
+        if(ammo == null)
+            return false;
+
+        InventItem item;
+        try
+        {
+            item = ammo.item;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if(item == null)
+            return false;
+
+        if(!KingWeaponSupport.TryGetSourceByItem(item, out source) || source == null)
+            return false;
+
+        if(source.destroyed || source.life <= 0)
+            return false;
+
+        return true;
     }
 }

@@ -11,6 +11,7 @@ namespace DeadCellsMultiplayerMod.Ghost;
 internal static class KingWeaponSupport
 {
     private static readonly ConditionalWeakTable<Weapon, KingSkin> WeaponToSource = new();
+    private static readonly ConditionalWeakTable<InventItem, KingSkin> ItemToSource = new();
     private static readonly ConditionalWeakTable<OldSkill, SkillHooks> WrappedSkills = new();
 
     [ThreadStatic]
@@ -57,12 +58,23 @@ internal static class KingWeaponSupport
 
         WeaponToSource.Remove(weapon);
         WeaponToSource.Add(weapon, source);
+
+        var item = weapon.item;
+        if(item != null)
+        {
+            ItemToSource.Remove(item);
+            ItemToSource.Add(item, source);
+        }
     }
 
     public static void Unbind(Weapon weapon)
     {
         if(weapon == null)
             return;
+
+        var item = weapon.item;
+        if(item != null)
+            ItemToSource.Remove(item);
         WeaponToSource.Remove(weapon);
     }
 
@@ -74,6 +86,16 @@ internal static class KingWeaponSupport
             return false;
         }
         return WeaponToSource.TryGetValue(weapon, out source!);
+    }
+
+    public static bool TryGetSourceByItem(InventItem? item, out KingSkin source)
+    {
+        if(item == null)
+        {
+            source = null!;
+            return false;
+        }
+        return ItemToSource.TryGetValue(item, out source!);
     }
 
     public static bool IsKingWeapon(Weapon weapon)
