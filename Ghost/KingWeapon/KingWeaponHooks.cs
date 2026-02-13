@@ -37,6 +37,9 @@ internal static class KingWeaponHooks
         Hook_Entity.cancelVelocities += Hook_Entity_cancelVelocities;
         Hook_Entity.setAffectS += Hook_Entity_setAffectS;
         Hook_Entity.removeAllAffects += Hook_Entity_removeAllAffects;
+        Hook_Entity.addAllAffixesFrom += Hook_Entity_addAllAffixesFrom;
+        Hook_Entity.addReceivedAffix += Hook_Entity_addReceivedAffix;
+        Hook_Entity.removeAllReceivedAffix += Hook_Entity_removeAllReceivedAffix;
 
         Hook_Weapon.prepare += Hook_Weapon_prepare;
         Hook_Weapon.get_shootX += Hook_Weapon_get_shootX;
@@ -181,6 +184,38 @@ internal static class KingWeaponHooks
         if(KingWeaponSupport.IsInKingContext && ModEntry.me != null && ReferenceEquals(self, ModEntry.me))
             return;
         orig(self, list);
+    }
+
+    private static void Hook_Entity_addAllAffixesFrom(
+        Hook_Entity.orig_addAllAffixesFrom orig,
+        Entity self,
+        InventItem sourceItem,
+        Ref<double> durationS)
+    {
+        if(ShouldSuppressPlayerAffixesInKingContext(self))
+            return;
+        orig(self, sourceItem, durationS);
+    }
+
+    private static void Hook_Entity_addReceivedAffix(
+        Hook_Entity.orig_addReceivedAffix orig,
+        Entity self,
+        dc.String affixId,
+        Ref<double> durationS)
+    {
+        if(ShouldSuppressPlayerAffixesInKingContext(self))
+            return;
+        orig(self, affixId, durationS);
+    }
+
+    private static void Hook_Entity_removeAllReceivedAffix(
+        Hook_Entity.orig_removeAllReceivedAffix orig,
+        Entity self,
+        dc.String affixId)
+    {
+        if(ShouldSuppressPlayerAffixesInKingContext(self))
+            return;
+        orig(self, affixId);
     }
 
     private static void Hook_Weapon_prepare(Hook_Weapon.orig_prepare orig, Weapon self, double attackSpeed)
@@ -659,6 +694,19 @@ internal static class KingWeaponHooks
         {
             return false;
         }
+    }
+
+    private static bool ShouldSuppressPlayerAffixesInKingContext(Entity? self)
+    {
+        if(self == null)
+            return false;
+        if(!KingWeaponSupport.IsInKingContext)
+            return false;
+        if(self is Hero)
+            return true;
+        if(self is KingSkin)
+            return true;
+        return false;
     }
 
     private static void TryCleanupReturnedAmmo(Ammo? ammo)
