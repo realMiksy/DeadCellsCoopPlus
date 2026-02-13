@@ -409,6 +409,9 @@ internal static class KingWeaponHooks
 
     private static bool Hook_BaseShield_tryToCancel(Hook_BaseShield.orig_tryToCancel orig, BaseShield self, bool byWeapon)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return false;
+
         if(KingWeaponSupport.IsKingWeapon(self))
             return KingWeaponSupport.WithKingContext(self, () =>
             {
@@ -419,6 +422,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldChargeStart(Hook_BaseShield.orig_onShieldChargeStart orig, BaseShield self)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -432,6 +438,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldReleased(Hook_BaseShield.orig_onShieldReleased orig, BaseShield self)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -445,6 +454,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_startParry(Hook_BaseShield.orig_startParry orig, BaseShield self)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -458,6 +470,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldStartParry(Hook_BaseShield.orig_onShieldStartParry orig, BaseShield self)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -471,6 +486,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldEndParry(Hook_BaseShield.orig_onShieldEndParry orig, BaseShield self)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -484,6 +502,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldHolding(Hook_BaseShield.orig_onShieldHolding orig, BaseShield self, double ratio)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -499,6 +520,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldBlock(Hook_BaseShield.orig_onShieldBlock orig, BaseShield self, AttackData sourceAtk, bool fullParry)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -512,6 +536,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_onShieldCounterSuccessful(Hook_BaseShield.orig_onShieldCounterSuccessful orig, BaseShield self, AttackData sourceAtk, bool fullParry)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -525,6 +552,9 @@ internal static class KingWeaponHooks
 
     private static void Hook_BaseShield_counterGrenade(Hook_BaseShield.orig_counterGrenade orig, BaseShield self, Grenade repelled)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return;
+
         if(KingWeaponSupport.IsKingWeapon(self))
         {
             KingWeaponSupport.WithKingContext(self, () =>
@@ -538,6 +568,9 @@ internal static class KingWeaponHooks
 
     private static Bullet Hook_BaseShield_counterBullet(Hook_BaseShield.orig_counterBullet orig, BaseShield self, AttackData sourceAtk, Bullet cBullet, bool fullParry)
     {
+        if(ShouldSuppressLocalHeroShieldInKingContext(self))
+            return cBullet;
+
         if(KingWeaponSupport.IsKingWeapon(self))
             return KingWeaponSupport.WithKingContext(self, () =>
             {
@@ -603,6 +636,29 @@ internal static class KingWeaponHooks
             return false;
 
         return true;
+    }
+
+    private static bool ShouldSuppressLocalHeroShieldInKingContext(BaseShield? self)
+    {
+        if(self == null)
+            return false;
+        if(!KingWeaponSupport.IsInKingContext)
+            return false;
+        if(KingWeaponSupport.IsKingWeapon(self))
+            return false;
+
+        var localHero = ModEntry.me;
+        if(localHero == null)
+            return false;
+
+        try
+        {
+            return ReferenceEquals(self.owner, localHero);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void TryCleanupReturnedAmmo(Ammo? ammo)
