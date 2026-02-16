@@ -44,11 +44,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static int forceExactNemesisTargetDepth;
         private static readonly Dictionary<int, QueuedOldSkillMarker> hostQueuedOldSkillMarkers = new();
 
-        private const double ClientMobDrawSendRateHz = 20.0;
-        private const double HostStateSendRateHz = 20.0;
+        private const double ClientMobDrawSendRateHz = 60.0;
+        private const double HostStateSendRateHz = 60.0;
         private const double ClientInterpolationAlpha = 0.25;
         private const double ClientAiLockSeconds = 0.3;
-        private const double ClientAttackUnlockSeconds = 1.5;
+        private const double ClientAttackUnlockSeconds = 2.2;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
@@ -232,6 +232,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (IsClient(net) && IsSyncMob(self))
             {
                 ApplyInterpolatedState(self);
+                if (IsClientAttackUnlockActive(self))
+                    orig(self);
                 return;
             }
 
@@ -1588,8 +1590,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                try { oldSkill.prepare(data); } catch { }
-                oldSkill.execute(null);
+                mob.queueAttack(oldSkill, requiresTargetInArea, data);
             }
             catch
             {
@@ -1603,7 +1604,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (oldSkill == null)
                         return;
 
-                    mob.queueAttack(oldSkill, requiresTargetInArea, data);
+                    try { oldSkill.prepare(data); } catch { }
+                    oldSkill.execute(null);
                 }
                 catch
                 {
@@ -1829,6 +1831,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var hostX = state.X;
             var hostY = state.Y;
             var hostType = state.Type ?? string.Empty;
+            var requireTypeMatch = !string.IsNullOrWhiteSpace(hostType);
 
             if (hostToLocalIndices.TryGetValue(hostIndex, out var mappedIndex))
             {
@@ -1848,8 +1851,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         localType = string.Empty;
                     }
                     
-                    if (dx * dx + dy * dy <= MaxCoordinateMatchDistanceSq && 
-                        string.Equals(localType, hostType, StringComparison.Ordinal))
+                    var typeMatches = !requireTypeMatch || string.Equals(localType, hostType, StringComparison.Ordinal);
+                    if (dx * dx + dy * dy <= MaxCoordinateMatchDistanceSq && typeMatches)
                         return mappedIndex;
                 }
 
@@ -1880,8 +1883,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     localType = string.Empty;
                 }
                 
-                // Skip if type doesn't match
-                if (!string.Equals(localType, hostType, StringComparison.Ordinal))
+                // For attack packets type can be omitted, then we match only by coordinates.
+                if (requireTypeMatch && !string.Equals(localType, hostType, StringComparison.Ordinal))
                     continue;
 
                 var x = GetSyncX(mob);
