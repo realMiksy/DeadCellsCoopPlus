@@ -1,4 +1,6 @@
 using System;
+using Hashlink.Virtuals;
+using HaxeProxy.Runtime;
 using dc.en;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using ModCore.Utilities;
@@ -83,6 +85,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            ApplyTargetToCorpse(forceStartFall: false);
             EnsureLethalFallStarted();
         }
 
@@ -161,12 +164,54 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             try { corpse.dir = _targetDir; } catch { }
-            if (!_lethalFallStarted)
+            if (!_lethalFallStarted || IsCorpseStabilized(corpse))
             {
-                try { corpse.setPosPixel(_targetX, _targetY); } catch { }
+                SafeSnapCorpse(corpse, _targetX, _targetY);
             }
             if (forceStartFall)
                 EnsureLethalFallStarted();
+        }
+
+        private static void SafeSnapCorpse(HeroDeadCorpse corpse, double x, double y)
+        {
+            try { corpse.setPosPixel(x, y); } catch { }
+
+            // Prevent network snaps from placing corpse slightly below ground tiles.
+            try
+            {
+                var map = corpse._level?.map;
+                if (map == null)
+                    return;
+
+                var cx = corpse.cx;
+                var cy = corpse.cy;
+                var xr = corpse.xr;
+                var yr = corpse.yr;
+                var groundYr = map.getGroundYr(cx, cy, Ref<double>.From(ref xr), Ref<double>.From(ref yr));
+                if (double.IsFinite(groundYr) && corpse.yr > groundYr)
+                    corpse.setPosCase(cx, cy, xr, groundYr);
+            }
+            catch
+            {
+            }
+        }
+
+        private static bool IsCorpseStabilized(HeroDeadCorpse corpse)
+        {
+            try
+            {
+                var group = corpse.spr?.groupName?.ToString();
+                if (!string.IsNullOrEmpty(group) &&
+                    group.IndexOf("lethalSlam", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private void EnsureLethalFallStarted()

@@ -111,6 +111,7 @@ namespace DeadCellsMultiplayerMod
         private const int ForceDeathKey = 81; // Q
         private const double ReviveAttemptCooldownSeconds = 0.2;
         private const double DownedStateResendSeconds = 0.4;
+        private const double DownedGhostBodyYOffsetPx = 40.0;
 
         private sealed class RemoteDownedState
         {
@@ -1241,11 +1242,11 @@ namespace DeadCellsMultiplayerMod
                 var cine = EnsureRemoteDownedCine(state, client);
                 if (cine != null)
                     cine.UpdateTarget(state.X, state.Y, client.dir);
-                else
-                    try { client.setPosPixel(state.X, state.Y); } catch { }
+
+                try { client.setPosPixel(state.X, state.Y - DownedGhostBodyYOffsetPx); } catch { }
 
                 rLastX[index] = state.X;
-                rLastY[index] = state.Y;
+                rLastY[index] = state.Y - DownedGhostBodyYOffsetPx;
             }
 
             if (_remoteDownedCines.Count > 0)
@@ -1829,6 +1830,7 @@ namespace DeadCellsMultiplayerMod
 
                 var drawX = remote.X;
                 var drawY = remote.Y - 0.2d;
+                var useDownedOffset = false;
                 if (_remoteDowned.TryGetValue(remote.Id, out var downed))
                 {
                     var localLevelId = GetCurrentLevelId();
@@ -1838,6 +1840,7 @@ namespace DeadCellsMultiplayerMod
                     {
                         drawX = downed.X;
                         drawY = downed.Y;
+                        useDownedOffset = true;
                         if (_remoteDownedCines.TryGetValue(remote.Id, out var downedCine) &&
                             downedCine != null &&
                             !downedCine.destroyed)
@@ -1846,6 +1849,9 @@ namespace DeadCellsMultiplayerMod
                         }
                     }
                 }
+
+                if (useDownedOffset)
+                    drawY -= DownedGhostBodyYOffsetPx;
 
                 client.setPosPixel(drawX, drawY);
                 client.dir = remote.Dir;
