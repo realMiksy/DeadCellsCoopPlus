@@ -59,6 +59,7 @@ namespace DeadCellsMultiplayerMod
     {
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
+        private static bool s_hooksInstalled;
 
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
@@ -296,6 +297,10 @@ namespace DeadCellsMultiplayerMod
 
         void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
         {
+            if (s_hooksInstalled)
+                return;
+
+            s_hooksInstalled = true;
             entry.Logger.Information("\x1b[32m[[ModEntry] Mod Initializing Hooks...]\x1b[0m ");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;

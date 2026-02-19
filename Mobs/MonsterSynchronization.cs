@@ -25,6 +25,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
     IEventReceiver
     {
         private readonly ModEntry modEntry;
+        private static bool s_eventReceiverInstalled;
+        private static bool s_hooksInstalled;
 
         private static readonly object Sync = new();
         private static readonly List<Mob> trackedMobs = new();
@@ -99,8 +101,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         public MobsSynchronization(ModEntry entry)
         {
-            EventSystem.AddReceiver(this);
             modEntry = entry;
+            if (!s_eventReceiverInstalled)
+            {
+                EventSystem.AddReceiver(this);
+                s_eventReceiverInstalled = true;
+            }
         }
 
         public static void ClearTrackingForLevelChange()
@@ -113,6 +119,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         public void OnAdvancedModuleInitializing(ModEntry entry)
         {
+            if (s_hooksInstalled)
+                return;
+
+            s_hooksInstalled = true;
             entry.Logger.Information("\x1b[32m[[ModEntry.MobsSynchronization] Initializing MobsSynchronization hooks...]\x1b[0m ");
 
             Hook_Level.entitiesPostCreate += Hook_Level_entitiesPostCreate;
@@ -299,20 +309,30 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void Hook_Mob_onDie(Hook_Mob.orig_onDie orig, Mob self)
         {
+            var shouldSendDie = false;
+            var dieSyncId = -1;
+            var dieX = 0.0;
+            var dieY = 0.0;
+            NetNode? dieNet = null;
+            if (self != null && suppressMobDieSendDepth <= 0)
+            {
+                dieNet = GameMenu.NetRef;
+                if (dieNet != null && dieNet.IsAlive && TryGetMobSyncId(self, out dieSyncId))
+                {
+                    shouldSendDie = true;
+                    dieX = GetSyncX(self);
+                    dieY = GetSyncY(self);
+                }
+            }
+
             orig(self);
 
             if (self == null)
                 return;
 
-            if (suppressMobDieSendDepth <= 0)
+            if (shouldSendDie && dieNet != null && dieNet.IsAlive && dieSyncId >= 0)
             {
-                var net = GameMenu.NetRef;
-                if (net != null && net.IsAlive && TryGetMobSyncId(self, out var mobSyncId))
-                {
-                    var x = GetSyncX(self);
-                    var y = GetSyncY(self);
-                    net.SendMobDie(mobSyncId, x, y);
-                }
+                dieNet.SendMobDie(dieSyncId, dieX, dieY);
             }
 
             lock (Sync)
@@ -355,10 +375,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
             else if (IsClient(net))
             {
-                if (i.source == null || (ModEntry.me != null && ReferenceEquals(i.source, ModEntry.me)))
-                {
-                    shouldReport = true;
-                }
+                shouldReport = IsDamageFromLocalPlayer(i);
             }
 
             if (!shouldReport)
@@ -403,9 +420,42 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             net.SendMobHit(mobSyncId, life, x, y);
+        }
 
-            if (IsClient(net) && life <= 0)
-                net.SendMobDie(mobSyncId, x, y);
+        private static bool IsDamageFromLocalPlayer(AttackData attack)
+        {
+            if (attack == null)
+                return false;
+
+            var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero == null)
+                return false;
+
+            try
+            {
+                var source = attack.source;
+                if (source != null && ReferenceEquals(source, localHero))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var sourceWeapon = attack.sourceWeapon;
+                if (sourceWeapon == null)
+                    return false;
+
+                var owner = sourceWeapon.owner;
+                if (owner != null && ReferenceEquals(owner, localHero))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         private static void TrySendImmediateHostMobState(NetNode net, int mobSyncId, Mob mob, double x, double y)
@@ -702,6 +752,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null || trackedMobs.Count == 0)
                 return -1;
 
+            var hasTargetSyncId = TryGetMobSyncId(mob, out var targetSyncId);
+
             for (int i = 0; i < trackedMobs.Count; i++)
             {
                 var candidate = trackedMobs[i];
@@ -713,8 +765,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 try
                 {
-                    if (Equals(candidate, mob))
+                    if (hasTargetSyncId &&
+                        TryGetMobSyncId(candidate, out var candidateSyncId) &&
+                        candidateSyncId == targetSyncId)
+                    {
                         return i;
+                    }
                 }
                 catch
                 {
@@ -2132,7 +2188,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (mob == null)
                         continue;
 
-                    if (mob.life <= 0)
+                    var life = 0;
+                    try
+                    {
+                        life = mob.life;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (life <= 0)
                         continue;
 
                     var alreadyAdded = false;
@@ -2185,12 +2251,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 PruneInvalidTrackedMobsLocked();
                 foreach (var hit in hits)
                 {
+                    if (isHost && !IsKnownRemoteHitSenderOnHost(net, hit.UserId))
+                        continue;
+
                     var mob = ResolveMobFromHitLocked(hit);
                     if (mob == null)
                         continue;
 
-                    var prevLife = mob.life;
-                    var maxLife = System.Math.Max(1, mob.maxLife);
+                    if (!TryGetMobLifeAndMaxSafe(mob, out var prevLife, out var maxLife))
+                        continue;
+
                     var targetLife = System.Math.Clamp(hit.Hp, 0, maxLife);
 
                     if (targetLife >= prevLife)
@@ -2318,6 +2388,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
+                if (mob.destroyed || mob._level == null)
+                    return null;
+
                 if (currentLevel != null && mob._level != null && !ReferenceEquals(currentLevel, mob._level))
                     return null;
             }
@@ -2327,6 +2400,43 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return mob;
+        }
+
+        private static bool IsKnownRemoteHitSenderOnHost(NetNode? net, int senderId)
+        {
+            if (!IsHost(net))
+                return true;
+
+            var localId = net?.id ?? 0;
+            if (senderId <= 0 || senderId == localId)
+                return false;
+
+            if (!ModEntry.TryGetClientIndex(localId, senderId, out var index))
+                return false;
+
+            if (index < 0 || index >= ModEntry.clientIds.Length)
+                return false;
+
+            return ModEntry.clientIds[index] == senderId;
+        }
+
+        private static bool TryGetMobLifeAndMaxSafe(Mob mob, out int life, out int maxLife)
+        {
+            life = 0;
+            maxLife = 1;
+            if (mob == null)
+                return false;
+
+            try
+            {
+                life = mob.life;
+                maxLife = System.Math.Max(1, mob.maxLife);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }
