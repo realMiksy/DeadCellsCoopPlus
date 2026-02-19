@@ -48,6 +48,9 @@ public sealed class NetNode : IDisposable
         public int Dir = 1;
         public bool HasRemote;
         public string? LevelId;
+        public string? RoomLevelId;
+        public int? RoomId;
+        public bool HasRoom;
         public string? Anim;
         public int? AnimQueue;
         public bool? AnimG;
@@ -82,6 +85,10 @@ public sealed class NetNode : IDisposable
         public readonly double X;
         public readonly double Y;
         public readonly int Dir;
+        public readonly string? LevelId;
+        public readonly string? RoomLevelId;
+        public readonly int? RoomId;
+        public readonly bool HasRoom;
         public readonly string? Anim;
         public readonly int? AnimQueue;
         public readonly bool? AnimG;
@@ -90,12 +97,31 @@ public sealed class NetNode : IDisposable
         public readonly string? HeadAnim;
         public readonly bool HasHeadAnim;
 
-        public RemoteSnapshot(int id, double x, double y, int dir, string? anim, int? animQueue, bool? animG, bool hasAnim, string? username, string? headAnim, bool hasHeadAnim)
+        public RemoteSnapshot(
+            int id,
+            double x,
+            double y,
+            int dir,
+            string? levelId,
+            string? roomLevelId,
+            int? roomId,
+            bool hasRoom,
+            string? anim,
+            int? animQueue,
+            bool? animG,
+            bool hasAnim,
+            string? username,
+            string? headAnim,
+            bool hasHeadAnim)
         {
             Id = id;
             X = x;
             Y = y;
             Dir = dir;
+            LevelId = levelId;
+            RoomLevelId = roomLevelId;
+            RoomId = roomId;
+            HasRoom = hasRoom;
             Anim = anim;
             AnimQueue = animQueue;
             AnimG = animG;
@@ -1026,6 +1052,34 @@ public sealed class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("ZROOM|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["ZROOM|".Length..];
+            ParseRoomPayload(payload, out var parsedId, out var roomLevelValue, out var roomIdValue);
+            var effectiveId = parsedId ?? senderId;
+            if (forceSenderId)
+                effectiveId = senderId;
+
+            if (effectiveId.HasValue && roomIdValue >= 0)
+            {
+                lock (_sync)
+                {
+                    var state = GetOrCreateRemoteLocked(effectiveId.Value);
+                    state.RoomLevelId = roomLevelValue;
+                    state.RoomId = roomIdValue;
+                    state.HasRoom = true;
+                    state.HasRemote = true;
+                    _hasRemote = true;
+                    if (_primaryRemoteId == 0)
+                        _primaryRemoteId = effectiveId.Value;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = BuildRoomLine(effectiveId.Value, roomLevelValue, roomIdValue);
+            }
+            return true;
+        }
+
         if (line.StartsWith("ANIM|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line[(line.IndexOf('|') + 1)..];
@@ -1494,6 +1548,32 @@ public sealed class NetNode : IDisposable
             gFlag = parsedBool;
     }
 
+    private static void ParseRoomPayload(string payload, out int? parsedId, out string levelId, out int roomId)
+    {
+        parsedId = null;
+        levelId = string.Empty;
+        roomId = -1;
+
+        if (string.IsNullOrWhiteSpace(payload))
+            return;
+
+        var parts = payload.Split('|');
+        if (parts.Length >= 3 &&
+            int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRemoteId))
+        {
+            parsedId = parsedRemoteId;
+            levelId = parts[1];
+            _ = int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out roomId);
+            return;
+        }
+
+        if (parts.Length >= 2)
+        {
+            levelId = parts[0];
+            _ = int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out roomId);
+        }
+    }
+
 
     private static void ParseHeadAnimPayload(string payload, out int? parsedId, out string animName)
     {
@@ -1948,6 +2028,18 @@ public sealed class NetNode : IDisposable
     private static string BuildHeadAnimLine(int id, string animName)
     {
         return $"HEADANIM|{id}|{animName}\n";
+    }
+
+    private static string BuildRoomLine(int id, string levelId, int roomId)
+    {
+        var safeLevelId = (levelId ?? string.Empty)
+            .Replace("|", "/", StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Replace("\n", string.Empty, StringComparison.Ordinal);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"ZROOM|{id}|{safeLevelId}|{roomId}\n");
     }
 
     private static string BuildWeaponLine(string tag, int id, string kind, int slot, int permanentId, int? ammo)
@@ -2412,6 +2504,23 @@ public sealed class NetNode : IDisposable
         SendRaw($"LEVEL|{senderId}|{safe}");
     }
 
+    public void SendRoomTarget(string levelId, int roomId)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0 || roomId < 0)
+            return;
+
+        var safe = (levelId ?? string.Empty)
+            .Replace("|", "/", StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Replace("\n", string.Empty, StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(safe))
+            return;
+
+        SendRaw($"ZROOM|{ID}|{safe}|{roomId}");
+    }
+
     public void SendKick()
     {
         if (!HasAnyConnection()) return;
@@ -2692,12 +2801,30 @@ public sealed class NetNode : IDisposable
 
                 var hasAnim = state.HasAnim;
                 var hasHeadAnim = state.HasHeadAnim;
+                var hasRoom = state.HasRoom;
                 var anim = hasAnim ? state.Anim : null;
                 var animQueue = hasAnim ? state.AnimQueue : null;
                 var animG = hasAnim ? state.AnimG : null;
-                var headAnim = hasHeadAnim? state.HeadAnim : null;
+                var headAnim = hasHeadAnim ? state.HeadAnim : null;
+                var roomLevelId = hasRoom ? state.RoomLevelId : null;
+                var roomId = hasRoom ? state.RoomId : null;
 
-                snapshot.Add(new RemoteSnapshot(state.Id, state.X, state.Y, state.Dir, anim, animQueue, animG, hasAnim, state.Username, headAnim, hasHeadAnim));
+                snapshot.Add(new RemoteSnapshot(
+                    state.Id,
+                    state.X,
+                    state.Y,
+                    state.Dir,
+                    state.LevelId,
+                    roomLevelId,
+                    roomId,
+                    hasRoom,
+                    anim,
+                    animQueue,
+                    animG,
+                    hasAnim,
+                    state.Username,
+                    headAnim,
+                    hasHeadAnim));
 
                 if (hasAnim)
                     state.HasAnim = false;

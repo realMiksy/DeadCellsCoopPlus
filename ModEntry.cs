@@ -5,6 +5,7 @@ using ModCore.Mods;
 using System.Diagnostics;
 using System.Net;
 using dc.en;
+using dc.en.inter;
 using dc.pr;
 using ModCore.Utilities;
 using ModCore.Modules;
@@ -122,6 +123,8 @@ namespace DeadCellsMultiplayerMod
         private const double LocalReviveBodyYOffsetPx = 0.5;
         private const double PostRevivePositionLockSeconds = 0.0;
         private const string ReviveHintText = "Hold R to restore";
+        private string _lastRoomStateLevelId = string.Empty;
+        private int _lastRoomStateRoomId = int.MinValue;
 
         private sealed class RemoteDownedState
         {
@@ -307,10 +310,56 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.onDie += Hook_Hero_onDie;
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
+            Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
+        }
+
+        private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
+        {
+            var shouldRefresh = false;
+            if (_netRole != NetRole.None &&
+                _net != null &&
+                me != null &&
+                lp != null &&
+                ReferenceEquals(lp, me) &&
+                self != null)
+            {
+                try
+                {
+                    var targetLevelId = self.destMap?.id?.ToString();
+                    var targetRoomId = self.linkId;
+                    if (targetRoomId >= 0)
+                    {
+                        var targetAreaKey = targetRoomId;
+                        try
+                        {
+                            var targetRoom = self.destMap?.getRoomById(targetRoomId);
+                            var mapped = ComputeRoomAreaKey(targetRoom);
+                            if (mapped >= 0)
+                                targetAreaKey = mapped;
+                        }
+                        catch
+                        {
+                        }
+
+                        SendRoomTarget(targetLevelId, targetAreaKey, force: true);
+                        shouldRefresh = true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            orig(self, lp, mob);
+
+            if (shouldRefresh)
+            {
+                try { ReceiveGhostCoords(); } catch { }
+            }
         }
 
         private void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)
@@ -567,36 +616,13 @@ namespace DeadCellsMultiplayerMod
 
             for (int i = 0; i < clients.Length; i++)
             {
-                var client = clients[i];
-                if (client != null)
-                {
-                    client.destroy();
-                    client.dispose();
-                    client.disposeGfx();
-                }
-                var head = clientHeads[i];
-                if (head != null)
-                {
-                    head.dispose();
-                    clientHeads[i] = null;
-                }
-                clients[i] = _ghost.CreateGhostKing(me._level);
-
-                var knownSkin = clientSkins[i];
-                if (!string.IsNullOrWhiteSpace(knownSkin))
-                    clients[i].ApplyRemoteSkin(knownSkin);
-                var knownHead = clientHeadSkins[i];
-                clients[i].RemoteHeadSkinId = NormalizeHeadSkin(
-                    !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
-                );
-
-                RecreateClientHead(i);
-
+                DisposeClientSlot(i, clearIdentity: false);
                 rLastX[i] = 0;
                 rLastY[i] = 0;
-                clientLabels[i] = null;
-                clientIds[i] = 0;
             }
+
+            SendCurrentRoomStateIfNeeded(force: true);
+            ReceiveGhostCoords();
         }
 
 
@@ -674,6 +700,117 @@ namespace DeadCellsMultiplayerMod
             int senderId = net.id;
             if (senderId <= 0) return;
             net.LevelSend(senderId, lvl);
+        }
+
+        private void SendRoomTarget(string? targetLevelId, int targetRoomId, bool force)
+        {
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || net.id <= 0)
+                return;
+            if (targetRoomId < 0)
+                return;
+
+            var effectiveLevelId = string.IsNullOrWhiteSpace(targetLevelId)
+                ? GetCurrentLevelId()
+                : targetLevelId.Trim();
+            if (string.IsNullOrWhiteSpace(effectiveLevelId))
+                return;
+
+            if (!force &&
+                string.Equals(_lastRoomStateLevelId, effectiveLevelId, StringComparison.Ordinal) &&
+                _lastRoomStateRoomId == targetRoomId)
+            {
+                return;
+            }
+
+            net.SendRoomTarget(effectiveLevelId, targetRoomId);
+            _lastRoomStateLevelId = effectiveLevelId;
+            _lastRoomStateRoomId = targetRoomId;
+        }
+
+        private void SendCurrentRoomStateIfNeeded(bool force)
+        {
+            if (me == null)
+                return;
+            if (!TryGetHeroRoomSignature(me, out var currentLevelId, out var currentRoomId))
+                return;
+
+            SendRoomTarget(currentLevelId, currentRoomId, force);
+        }
+
+        private static bool TryGetHeroRoomSignature(Hero? hero, out string levelIdValue, out int roomId)
+        {
+            levelIdValue = string.Empty;
+            roomId = -1;
+            if (hero == null)
+                return false;
+
+            try
+            {
+                var level = hero._level;
+                var map = level?.map;
+                if (map == null)
+                    return false;
+
+                levelIdValue = map.id?.ToString() ?? string.Empty;
+                Room? room = null;
+
+                if (hero.lastRoomId >= 0)
+                    room = map.getRoomById(hero.lastRoomId);
+                if (room == null)
+                    room = map.getRoomAt(hero.cx, hero.cy);
+                if (room == null)
+                    return false;
+
+                roomId = ComputeRoomAreaKey(room);
+                if (roomId < 0)
+                    roomId = room.id;
+                return roomId >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int ComputeRoomAreaKey(Room? room)
+        {
+            if (room == null)
+                return -1;
+
+            try
+            {
+                var group = room.rGroup;
+                if (group >= 0)
+                    return group;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var parent = room.parent;
+                if (parent != null && parent.id >= 0)
+                    return parent.id;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (room.id >= 0)
+                    return room.id;
+            }
+            catch
+            {
+            }
+
+            return -1;
         }
 
 
@@ -808,27 +945,60 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             var localId = net.id;
+            var localLevelId = GetCurrentLevelId();
+            if (string.IsNullOrWhiteSpace(localLevelId))
+            {
+                try { localLevelId = me._level?.map?.id?.ToString() ?? string.Empty; }
+                catch { localLevelId = string.Empty; }
+            }
+            var localRoomId = -1;
+            try
+            {
+                var map = me._level?.map;
+                Room? localRoom = null;
+                if (map != null)
+                {
+                    if (me.lastRoomId >= 0)
+                        localRoom = map.getRoomById(me.lastRoomId);
+                    if (localRoom == null)
+                        localRoom = map.getRoomAt(me.cx, me.cy);
+                }
+
+                localRoomId = ComputeRoomAreaKey(localRoom);
+                if (localRoomId < 0 && localRoom != null)
+                    localRoomId = localRoom.id;
+            }
+            catch
+            {
+                localRoomId = -1;
+            }
+
             foreach (var remote in remotes)
             {
                 if (!TryGetClientIndex(localId, remote.Id, out var index))
                     continue;
 
-                var client = clients[index];
-                if (client == null)
-                    continue;
-
                 remotePlayerId = remote.Id;
                 clientIds[index] = remote.Id;
+                if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId, localRoomId))
+                {
+                    DisposeClientSlot(index, clearIdentity: false);
+                    continue;
+                }
+
+                var client = EnsureClientKingSlot(index);
+                if (client == null)
+                    continue;
 
                 var drawX = remote.X;
                 var drawY = remote.Y - 0.2d;
                 var useDownedOffset = false;
                 if (_remoteDowned.TryGetValue(remote.Id, out var downed))
                 {
-                    var localLevelId = GetCurrentLevelId();
-                    if (string.IsNullOrEmpty(localLevelId) ||
+                    var currentLevelId = GetCurrentLevelId();
+                    if (string.IsNullOrEmpty(currentLevelId) ||
                         string.IsNullOrEmpty(downed.LevelId) ||
-                        string.Equals(localLevelId, downed.LevelId, StringComparison.Ordinal))
+                        string.Equals(currentLevelId, downed.LevelId, StringComparison.Ordinal))
                     {
                         drawX = downed.X;
                         drawY = downed.Y;
@@ -869,6 +1039,96 @@ namespace DeadCellsMultiplayerMod
                 if(remote.HasHeadAnim && !string.IsNullOrWhiteSpace(remote.HeadAnim))
                     PlayGhostHeadAnim(client, remote.HeadAnim);
             }
+        }
+
+        private bool ShouldKeepRemoteKingVisibleInRoom(NetNode.RemoteSnapshot remote, string localLevelId, int localRoomId)
+        {
+            if (string.IsNullOrWhiteSpace(localLevelId))
+                return true;
+
+            if (!string.IsNullOrWhiteSpace(localLevelId) &&
+                !string.IsNullOrWhiteSpace(remote.LevelId) &&
+                !string.Equals(remote.LevelId, localLevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (localRoomId < 0)
+                return true;
+
+            if (remote.HasRoom &&
+                remote.RoomId.HasValue &&
+                remote.RoomId.Value >= 0 &&
+                !string.IsNullOrWhiteSpace(remote.RoomLevelId))
+            {
+                if (!string.Equals(remote.RoomLevelId, localLevelId, StringComparison.Ordinal))
+                    return false;
+
+                return remote.RoomId.Value == localRoomId;
+            }
+
+            return true;
+        }
+
+        private GhostKing? EnsureClientKingSlot(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return null;
+
+            var existing = clients[slot];
+            if (existing != null)
+                return existing;
+
+            if (_ghost == null || me == null || me._level == null)
+                return null;
+
+            var created = _ghost.CreateGhostKing(me._level);
+            clients[slot] = created;
+
+            var knownSkin = clientSkins[slot];
+            if (!string.IsNullOrWhiteSpace(knownSkin))
+                created.ApplyRemoteSkin(knownSkin);
+
+            var knownHead = clientHeadSkins[slot];
+            created.RemoteHeadSkinId = NormalizeHeadSkin(
+                !string.IsNullOrWhiteSpace(knownHead) ? knownHead : remoteHeadSkin
+            );
+            RecreateClientHead(slot);
+
+            if (!string.IsNullOrWhiteSpace(clientLabels[slot]))
+                _ghost.SetLabel(created, clientLabels[slot]);
+
+            return created;
+        }
+
+        private void DisposeClientSlot(int slot, bool clearIdentity)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return;
+
+            var head = clientHeads[slot];
+            if (head != null)
+            {
+                try { head.dispose(); } catch { }
+                clientHeads[slot] = null;
+            }
+
+            var client = clients[slot];
+            if (client != null)
+            {
+                try { client.destroy(); } catch { }
+                try { client.dispose(); } catch { }
+                try { client.disposeGfx(); } catch { }
+            }
+            clients[slot] = null!;
+
+            if (!clearIdentity)
+                return;
+
+            clientIds[slot] = 0;
+            clientLabels[slot] = null;
+            rLastX[slot] = 0;
+            rLastY[slot] = 0;
         }
 
         private void ReceiveGhostWeapons()
