@@ -2,6 +2,7 @@ using System;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
 using dc.en;
+using dc.ui;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using ModCore.Utilities;
 
@@ -22,6 +23,9 @@ namespace DeadCellsMultiplayerMod
         private double _targetY;
         private int _targetDir;
         private string? _interactionLabelText;
+        private Pointer? _corpsePointer;
+        private const int CorpseMarkerColor = 0xFF4A4A;
+        private const int PointerFxSuppressionKey = 188743680;
 
         public RemoteDownedCorpse(Hero templateHero, GhostKing ghost, double x, double y, int dir, dc.GameCinematic? previousCine)
         {
@@ -123,6 +127,7 @@ namespace DeadCellsMultiplayerMod
 
             ApplyTargetToCorpse(forceStartFall: false);
             EnsureLethalFallStarted();
+            EnsureCorpsePointer();
         }
 
         private void CreateCorpse()
@@ -139,6 +144,7 @@ namespace DeadCellsMultiplayerMod
                 _lethalFallStarted = false;
                 ApplyTargetToCorpse(forceStartFall: true);
                 ApplyInteractionLabel();
+                EnsureCorpsePointer();
             }
             catch
             {
@@ -319,6 +325,80 @@ namespace DeadCellsMultiplayerMod
             try { _ghost.visible = false; } catch { }
         }
 
+        private void EnsureCorpsePointer()
+        {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+            {
+                ClearCorpsePointer();
+                return;
+            }
+
+            if (_corpsePointer != null)
+            {
+                try
+                {
+                    if (_corpsePointer.destroyed)
+                    {
+                        _corpsePointer = null;
+                    }
+                    else
+                    {
+                        _corpsePointer.e = corpse;
+                        return;
+                    }
+                }
+                catch
+                {
+                    _corpsePointer = null;
+                }
+            }
+
+            try
+            {
+                _corpsePointer = new Pointer(corpse, "".AsHaxeString(), 99999.0, CorpseMarkerColor);
+                SuppressPointerFx(_corpsePointer);
+            }
+            catch
+            {
+                _corpsePointer = null;
+            }
+        }
+
+        private static void SuppressPointerFx(Pointer? pointer)
+        {
+            if (pointer == null)
+                return;
+
+            try
+            {
+                dynamic fastCheck = pointer.cd.fastCheck;
+                fastCheck.set(PointerFxSuppressionKey, (object)1);
+            }
+            catch
+            {
+            }
+        }
+
+        private void ClearCorpsePointer()
+        {
+            if (_corpsePointer == null)
+                return;
+
+            try
+            {
+                if (!_corpsePointer.destroyed)
+                    _corpsePointer.destroy();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _corpsePointer = null;
+            }
+        }
+
         private void ApplyInteractionLabel()
         {
             var corpse = _corpse;
@@ -378,6 +458,8 @@ namespace DeadCellsMultiplayerMod
 
         private void DisposeCorpse()
         {
+            ClearCorpsePointer();
+
             var corpse = _corpse;
             _corpse = null;
             _lethalFallStarted = false;

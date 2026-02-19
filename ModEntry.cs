@@ -134,6 +134,7 @@ namespace DeadCellsMultiplayerMod
 
         private readonly Dictionary<int, RemoteDownedState> _remoteDowned = new();
         private readonly Dictionary<int, RemoteDownedCorpse> _remoteDownedCines = new();
+        private readonly HashSet<int> _downedAnnouncements = new();
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -1126,6 +1127,7 @@ namespace DeadCellsMultiplayerMod
                 if (!state.IsDowned)
                 {
                     _remoteDowned.Remove(state.UserId);
+                    _downedAnnouncements.Remove(state.UserId);
                     DisposeRemoteDownedCine(state.UserId);
                     continue;
                 }
@@ -1139,11 +1141,60 @@ namespace DeadCellsMultiplayerMod
                     _remoteDowned[state.UserId] = existing;
                 }
 
+                if (_downedAnnouncements.Add(state.UserId))
+                    NotifyRemotePlayerDowned(net, state.UserId);
+
                 existing.X = state.X;
                 existing.Y = state.Y;
                 existing.LevelId = state.LevelId ?? string.Empty;
                 existing.UpdatedAtTicks = Stopwatch.GetTimestamp();
             }
+        }
+
+        private void NotifyRemotePlayerDowned(NetNode net, int userId)
+        {
+            if (userId <= 0)
+                return;
+
+            try
+            {
+                var displayName = ResolveRemotePlayerDisplayName(net, userId);
+                if (string.IsNullOrWhiteSpace(displayName))
+                    displayName = $"Player {userId}";
+                MultiplayerUI.PushSystemMessage($"{displayName} fell!");
+            }
+            catch
+            {
+            }
+        }
+
+        private string ResolveRemotePlayerDisplayName(NetNode net, int userId)
+        {
+            if (net == null || userId <= 0)
+                return string.Empty;
+
+            if (net.TryGetRemoteUserSnapshots(out var users))
+            {
+                for (int i = 0; i < users.Count; i++)
+                {
+                    var user = users[i];
+                    if (user.Id != userId)
+                        continue;
+
+                    if (!string.IsNullOrWhiteSpace(user.Username))
+                        return user.Username.Trim();
+                    break;
+                }
+            }
+
+            if (TryGetClientIndex(net.id, userId, out var slot))
+            {
+                var label = GetClientLabel(slot);
+                if (!string.IsNullOrWhiteSpace(label))
+                    return label.Trim();
+            }
+
+            return string.Empty;
         }
 
         private void ConsumeReviveRequests(NetNode net)
@@ -1210,6 +1261,7 @@ namespace DeadCellsMultiplayerMod
             {
                 DisposeRemoteDownedCine(stale[i]);
                 _remoteDowned.Remove(stale[i]);
+                _downedAnnouncements.Remove(stale[i]);
             }
         }
 
@@ -1602,6 +1654,7 @@ namespace DeadCellsMultiplayerMod
 
             net.SendPlayerReviveRequest(nearest.UserId);
             _remoteDowned.Remove(nearest.UserId);
+            _downedAnnouncements.Remove(nearest.UserId);
             _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
             ResetReviveHold();
             ClearReviveHints();
@@ -1812,6 +1865,7 @@ namespace DeadCellsMultiplayerMod
             ResetReviveHold();
             ClearReviveHints();
             _remoteDowned.Clear();
+            _downedAnnouncements.Clear();
             DisposeAllRemoteDownedCines();
 
             if (unlockLocalHero && me != null)
