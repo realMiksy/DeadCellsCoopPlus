@@ -82,6 +82,8 @@ namespace DeadCellsMultiplayerMod
         private double _animResendElapsed;
         private double? _lastAnimPlayRatio;
         private long _suppressHeroAnimUntilTicks;
+        private string? _lastSentHeroSkin;
+        private string? _lastSentHeroHeadSkin;
 
         public static MiniMap miniMap;
 
@@ -125,6 +127,7 @@ namespace DeadCellsMultiplayerMod
         private const string ReviveHintText = "Hold R to restore";
         private string _lastRoomStateLevelId = string.Empty;
         private int _lastRoomStateRoomId = int.MinValue;
+        private const double RoomMismatchKeepDistancePx = 850;
 
         private sealed class RemoteDownedState
         {
@@ -311,10 +314,75 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
+            Hook_Hero.applySkin += Hook_Hero_applySkin;
+            Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
             Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
+        }
+
+
+        private void Hook_Hero_applySkin(Hook_Hero.orig_applySkin orig, Hero self, dc.String skinId)
+        {
+            orig(self, skinId);
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || !net.IsAlive || me == null || self == null || !ReferenceEquals(self, me))
+                return;
+
+            try
+            {
+                var rawSkin = dc.Main.Class.ME?.user?.heroSkin?.ToString();
+                if (string.IsNullOrWhiteSpace(rawSkin))
+                {
+                    try { rawSkin = self.getSkinInfo()?.consoleCmdId?.ToString(); } catch { }
+                }
+
+                var skin = NormalizeBodySkin(rawSkin);
+
+                if (string.Equals(_lastSentHeroSkin, skin, StringComparison.Ordinal))
+                    return;
+
+                net.SendHeroSkin(skin);
+                _lastSentHeroSkin = skin;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to send skin from applySkin hook: {msg}", ex.Message);
+            }
+        }
+
+        private void Hook_HeroHead_initCustomHead(Hook_HeroHead.orig_initCustomHead orig, HeroHead self)
+        {
+            orig(self);
+            if (_netRole == NetRole.None)
+                return;
+
+            var net = _net;
+            if (net == null || !net.IsAlive || me == null || self == null)
+                return;
+
+            HeroHead? localHead = null;
+            try { localHead = me.heroHead; } catch { }
+            if (localHead == null || !ReferenceEquals(self, localHead))
+                return;
+
+            try
+            {
+                var skin = NormalizeHeadSkin(dc.Main.Class.ME?.user?.heroHeadSkin?.ToString());
+                if (string.Equals(_lastSentHeroHeadSkin, skin, StringComparison.Ordinal))
+                    return;
+
+                net.SendHeroHeadSkin(skin);
+                _lastSentHeroHeadSkin = skin;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("[NetMod] Failed to send head skin from initCustomHead hook: {msg}", ex.Message);
+            }
         }
 
         private void Hook_ZDoor_onActivate(Hook_ZDoor.orig_onActivate orig, ZDoor self, Hero lp, bool mob)
@@ -662,6 +730,7 @@ namespace DeadCellsMultiplayerMod
             TryRecoverMissedFakeDeathFromLife();
             if (!_localFakeDead)
                 SendHeroCoords();
+            SendCurrentRoomStateIfNeeded(force: false);
             ReceiveGhostCoords();
             UpdateFakeDeathFlow(dt);
             MaintainPostRevivePositionLock();
@@ -858,14 +927,23 @@ namespace DeadCellsMultiplayerMod
             if (!TryGetClientIndex(localId, remoteId, out var index))
                 return;
 
-            var cleaned = string.IsNullOrWhiteSpace(skin)
-                ? "PrisonerDefault"
-                : skin.Replace("|", "/").Trim();
+            var cleaned = NormalizeBodySkin(skin);
+            var prev = clientSkins[index];
             clientSkins[index] = cleaned;
 
             var client = clients[index];
             if (client != null)
-                client.ApplyRemoteSkin(cleaned);
+            {
+                if (!string.Equals(prev, cleaned, StringComparison.Ordinal))
+                {
+                    if (!instance.RecreateClientKing(index))
+                        client.ApplyRemoteSkin(cleaned);
+                }
+                else if (client.spr == null)
+                {
+                    client.ApplyRemoteSkin(cleaned);
+                }
+            }
         }
 
         internal static void SetClientHeadSkin(int remoteId, string? skin)
@@ -896,6 +974,54 @@ namespace DeadCellsMultiplayerMod
             return string.IsNullOrWhiteSpace(skin)
                 ? "BaseFlame"
                 : skin.Replace("|", "/").Trim();
+        }
+
+        private static string NormalizeBodySkin(string? skin)
+        {
+            return string.IsNullOrWhiteSpace(skin)
+                ? "PrisonerDefault"
+                : skin.Replace("|", "/").Trim();
+        }
+
+        private bool RecreateClientKing(int slot)
+        {
+            if (slot < 0 || slot >= clients.Length)
+                return false;
+
+            var existing = clients[slot];
+            if (existing == null)
+                return false;
+
+            var x = rLastX[slot];
+            var y = rLastY[slot];
+            var dir = 1;
+            var targetable = true;
+            try
+            {
+                if (existing.spr != null)
+                {
+                    x = existing.spr.x;
+                    y = existing.spr.y;
+                }
+            }
+            catch
+            {
+            }
+
+            try { dir = existing.dir; } catch { }
+            try { targetable = existing._targetable; } catch { }
+
+            DisposeClientSlot(slot, clearIdentity: false);
+            var recreated = EnsureClientKingSlot(slot);
+            if (recreated == null)
+                return false;
+
+            try { recreated.setPosPixel(x, y); } catch { }
+            try { recreated.dir = dir; } catch { }
+            try { recreated._targetable = targetable; } catch { }
+            rLastX[slot] = x;
+            rLastY[slot] = y;
+            return true;
         }
 
         private void RecreateClientHead(int slot)
@@ -1064,10 +1190,31 @@ namespace DeadCellsMultiplayerMod
                 if (!string.Equals(remote.RoomLevelId, localLevelId, StringComparison.Ordinal))
                     return false;
 
-                return remote.RoomId.Value == localRoomId;
+                if (remote.RoomId.Value == localRoomId)
+                    return true;
+
+                // Transition/chest/teleporter boundaries can report different room ids
+                // while players are still effectively in the same visible area.
+                return ShouldKeepRemoteByProximity(remote);
             }
 
             return true;
+        }
+
+        private bool ShouldKeepRemoteByProximity(NetNode.RemoteSnapshot remote)
+        {
+            var hero = me;
+            if (hero?.spr == null)
+                return false;
+
+            var dx = remote.X - hero.spr.x;
+            var dy = remote.Y - hero.spr.y;
+            if (!double.IsFinite(dx) || !double.IsFinite(dy))
+                return false;
+
+            var distSq = dx * dx + dy * dy;
+            var maxDist = RoomMismatchKeepDistancePx;
+            return distSq <= maxDist * maxDist;
         }
 
         private GhostKing? EnsureClientKingSlot(int slot)
@@ -1464,6 +1611,12 @@ namespace DeadCellsMultiplayerMod
             return string.Equals(itemKindId, expectedKindId, StringComparison.Ordinal);
         }
 
+        private void ResetLocalSkinSendCache()
+        {
+            _lastSentHeroSkin = null;
+            _lastSentHeroHeadSkin = null;
+        }
+
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
         {
@@ -1493,6 +1646,7 @@ namespace DeadCellsMultiplayerMod
             {
                 _net?.Dispose();
                 ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
 
                 _net = NetNode.CreateHost(Logger, ep);
                 _netRole = NetRole.Host;
@@ -1519,6 +1673,7 @@ namespace DeadCellsMultiplayerMod
             {
                 _net?.Dispose();
                 ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
 
                 _net = NetNode.CreateClient(Logger, ep);
                 _netRole = NetRole.Client;
@@ -1551,6 +1706,7 @@ namespace DeadCellsMultiplayerMod
             }
             catch { }
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+            ResetLocalSkinSendCache();
             _net = null;
             _netRole = NetRole.None;
             GameMenu.NetRef = null;

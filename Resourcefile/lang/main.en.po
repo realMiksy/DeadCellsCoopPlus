@@ -44,3 +44,12 @@ msgstr "Guest"
 
 msgid "Player {0}"
 msgstr "Player {0}"
+
+msgid "{0} fell!"
+msgstr "{0} fell!"
+
+msgid "Hold R to restore"
+msgstr "Hold R to restore"
+
+msgid "Game Over"
+msgstr "Game Over"

@@ -21,10 +21,6 @@ msgstr ""
 msgid "Lobby menu"
 msgstr ""
 
-#: ConnectionUI.cs:278
-msgid "Lobby menu"
-msgstr ""
-
 #: ConnectionUI.cs:301
 msgid "Players' list"
 msgstr ""
@@ -36,7 +32,6 @@ msgstr ""
 #: ConnectionUI.cs:344
 msgid "- "
 msgstr ""
-
 
 #: GameMenu.cs:472
 msgid "Play multiplayer"
@@ -96,10 +91,6 @@ msgstr ""
 
 #: GameMenu.cs:541
 msgid "Port: "
-msgstr ""
-
-#: GameMenu.cs:541
-msgid "Edit port"
 msgstr ""
 
 #: GameMenu.cs:554
@@ -166,10 +157,6 @@ msgstr ""
 msgid "Port"
 msgstr ""
 
-#: GameMenu.cs:1111
-msgid "connecting..."
-msgstr ""
-
 #: GameMenu.cs:1115
 msgid "waiting for the host"
 msgstr ""
@@ -188,10 +175,6 @@ msgstr ""
 
 #: GameMenu.cs:1123
 msgid "connected to host"
-msgstr ""
-
-#: GameMenu.cs:1344
-msgid "OK"
 msgstr ""
 
 #: GameMenu.cs:1344
@@ -226,4 +209,13 @@ msgid "Guest"
 msgstr ""
 
 msgid "Player {0}"
+msgstr ""
+
+msgid "{0} fell!"
+msgstr ""
+
+msgid "Hold R to restore"
+msgstr ""
+
+msgid "Game Over"
 msgstr ""

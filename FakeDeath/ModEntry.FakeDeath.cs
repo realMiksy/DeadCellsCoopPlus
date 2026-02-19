@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Diagnostics;
 using dc.en;
 using dc.tool.mainSkills;
 using dc.ui;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
+using ModCore.Modules;
 using HaxeProxy.Runtime;
 using ModCore.Utilities;
 
@@ -256,7 +258,7 @@ namespace DeadCellsMultiplayerMod
                 var displayName = ResolveRemotePlayerDisplayName(net, userId);
                 if (string.IsNullOrWhiteSpace(displayName))
                     displayName = $"Player {userId}";
-                MultiplayerUI.PushSystemMessage($"{displayName} fell!");
+                MultiplayerUI.PushSystemMessage(FormatLocalized("{0} fell!", displayName));
             }
             catch
             {
@@ -853,7 +855,7 @@ namespace DeadCellsMultiplayerMod
                 try
                 {
                     if (pair.Key == userId)
-                        cine.SetInteractionLabel(ReviveHintText);
+                        cine.SetInteractionLabel(Localize(ReviveHintText));
                     else
                         cine.SetInteractionLabel(null);
                 }
@@ -1101,10 +1103,28 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                _ = new GameOver("Game Over".AsHaxeString(), true, null);
+                _ = new GameOver(Localize("Game Over").AsHaxeString(), true, null);
             }
             catch
             {
+            }
+        }
+
+        private static string Localize(string message)
+        {
+            return GetText.Instance.GetString(message);
+        }
+
+        private static string FormatLocalized(string format, params object[] args)
+        {
+            var localizedFormat = Localize(format);
+            try
+            {
+                return string.Format(CultureInfo.InvariantCulture, localizedFormat, args);
+            }
+            catch
+            {
+                return string.Format(CultureInfo.InvariantCulture, format, args);
             }
         }
 

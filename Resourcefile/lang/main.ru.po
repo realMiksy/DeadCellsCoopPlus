@@ -210,3 +210,12 @@ msgstr "Гость"
 
 msgid "Player {0}"
 msgstr "Игрок {0}"
+
+msgid "{0} fell!"
+msgstr "{0} пал!"
+
+msgid "Hold R to restore"
+msgstr "Удерживайте R, чтобы поднять"
+
+msgid "Game Over"
+msgstr "Игра окончена"

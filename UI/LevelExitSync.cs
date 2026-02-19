@@ -46,7 +46,7 @@ public class LevelExitSync :
     private const double ExitCounterYOffsetPx = 100.0;
     private const double ExitStateResendSeconds = 0.20;
     private const double CounterScale = 1.10;
-    private const int CounterColor = 0x000000;
+    private const int CounterColor = 0xFFFFFF;
     private const int MarkerColor = 0x68AD3D;
     private const int CircleColor = 0x59D5FF;
     private const double CircleAlphaIdle = 0.10;
