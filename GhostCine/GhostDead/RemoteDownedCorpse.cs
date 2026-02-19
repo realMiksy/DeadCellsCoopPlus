@@ -21,6 +21,7 @@ namespace DeadCellsMultiplayerMod
         private double _targetX;
         private double _targetY;
         private int _targetDir;
+        private string? _interactionLabelText;
 
         public RemoteDownedCorpse(Hero templateHero, GhostKing ghost, double x, double y, int dir, dc.GameCinematic? previousCine)
         {
@@ -52,6 +53,16 @@ namespace DeadCellsMultiplayerMod
 
             if (changed)
                 ApplyTargetToCorpse(forceStartFall: true);
+        }
+
+        public void SetInteractionLabel(string? text)
+        {
+            var normalized = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+            if (string.Equals(_interactionLabelText, normalized, StringComparison.Ordinal))
+                return;
+
+            _interactionLabelText = normalized;
+            ApplyInteractionLabel();
         }
 
         private int ResolveTargetDir(int dir)
@@ -127,6 +138,7 @@ namespace DeadCellsMultiplayerMod
                 _corpse = corpse;
                 _lethalFallStarted = false;
                 ApplyTargetToCorpse(forceStartFall: true);
+                ApplyInteractionLabel();
             }
             catch
             {
@@ -300,12 +312,30 @@ namespace DeadCellsMultiplayerMod
             {
             }
 
-            try { game.hud?.show(null); } catch { }
         }
 
         private void HideGhost()
         {
             try { _ghost.visible = false; } catch { }
+        }
+
+        private void ApplyInteractionLabel()
+        {
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+                return;
+
+            try
+            {
+                var textColor = 0xFFFFFF;
+                if (string.IsNullOrEmpty(_interactionLabelText))
+                    corpse.setGameplayLabel(null, Ref<int>.From(ref textColor));
+                else
+                    corpse.setGameplayLabel(_interactionLabelText.AsHaxeString(), Ref<int>.From(ref textColor));
+            }
+            catch
+            {
+            }
         }
 
         private void EnsureViewportTracksTemplateHero(bool immediate)

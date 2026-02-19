@@ -111,14 +111,17 @@ namespace DeadCellsMultiplayerMod
         private long _postReviveLockUntilTicks;
         private double _postReviveLockX;
         private double _postReviveLockY;
+        private int _reviveHoldTargetId;
+        private long _reviveHoldStartedTicks;
         private const double ReviveUseDistancePx = 48.0;
-        private const int ReviveInteractKey = 69; // E
-        private const int ForceDeathKey = 81; // Q
+        private const int ReviveInteractKey = 82; // R
         private const double ReviveAttemptCooldownSeconds = 0.2;
+        private const double ReviveHoldSeconds = 0.7;
         private const double DownedStateResendSeconds = 0.4;
         private const double DownedGhostBodyYOffsetPx = 40.0;
         private const double LocalReviveBodyYOffsetPx = 0.5;
         private const double PostRevivePositionLockSeconds = 0.0;
+        private const string ReviveHintText = "Hold R to restore";
 
         private sealed class RemoteDownedState
         {
@@ -1071,7 +1074,6 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
-            TryHandleForceDeathHotkey();
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
@@ -1083,32 +1085,6 @@ namespace DeadCellsMultiplayerMod
             UpdateGhostHeads();
         }
 
-        private void TryHandleForceDeathHotkey()
-        {
-            if (me == null)
-                return;
-
-            try
-            {
-                if (!dc.hxd.Key.Class.isPressed(ForceDeathKey))
-                    return;
-            }
-            catch
-            {
-                return;
-            }
-
-            try
-            {
-                if (!me.isAlive())
-                    return;
-                me.kill();
-            }
-            catch
-            {
-            }
-        }
-
         private void UpdateFakeDeathFlow(double dt)
         {
             var net = _net;
@@ -1116,6 +1092,7 @@ namespace DeadCellsMultiplayerMod
             {
                 if (_localFakeDead || _remoteDowned.Count > 0)
                     ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ClearReviveHints();
                 return;
             }
 
@@ -1126,12 +1103,12 @@ namespace DeadCellsMultiplayerMod
 
             if (_localFakeDead)
             {
+                ClearReviveHints();
                 MaintainLocalFakeDeath(net);
                 return;
             }
 
-            if (dc.hxd.Key.Class.isPressed(ReviveInteractKey))
-                TrySendReviveRequest(net);
+            ProcessReviveHold(net);
         }
 
         private void ConsumeRemoteDownedStates(NetNode net)
@@ -1569,29 +1546,89 @@ namespace DeadCellsMultiplayerMod
             SendLocalDownedState(net, isDowned: false, force: true);
         }
 
-        private void TrySendReviveRequest(NetNode net)
+        private void ProcessReviveHold(NetNode net)
         {
             if (me == null || _remoteDowned.Count == 0)
+            {
+                ResetReviveHold();
+                ClearReviveHints();
+                return;
+            }
+
+            bool isHoldPressed;
+            try { isHoldPressed = dc.hxd.Key.Class.isDown(ReviveInteractKey); }
+            catch { isHoldPressed = false; }
+
+            if (!isHoldPressed)
+            {
+                ResetReviveHold();
+                ClearReviveHints();
+                return;
+            }
+
+            var nearest = FindNearestReviveTarget();
+            if (nearest == null)
+            {
+                ResetReviveHold();
+                ClearReviveHints();
+                return;
+            }
+
+            ShowReviveHintFor(nearest.UserId);
+            var now = Stopwatch.GetTimestamp();
+            var holdTicks = (long)(Stopwatch.Frequency * ReviveHoldSeconds);
+
+            if (_reviveHoldTargetId != nearest.UserId)
+            {
+                _reviveHoldTargetId = nearest.UserId;
+                _reviveHoldStartedTicks = now;
+                return;
+            }
+
+            if (_reviveHoldStartedTicks == 0)
+                _reviveHoldStartedTicks = now;
+
+            if (now - _reviveHoldStartedTicks < holdTicks)
                 return;
 
-            var now = Stopwatch.GetTimestamp();
             if (_nextReviveAttemptTicks != 0 && now < _nextReviveAttemptTicks)
                 return;
 
+            if (!TryConsumeOneFlask(me))
+            {
+                ResetReviveHold();
+                return;
+            }
+
+            net.SendPlayerReviveRequest(nearest.UserId);
+            _remoteDowned.Remove(nearest.UserId);
+            _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
+            ResetReviveHold();
+            ClearReviveHints();
+        }
+
+        private RemoteDownedState? FindNearestReviveTarget()
+        {
+            if (me == null || _remoteDowned.Count == 0)
+                return null;
+
             var localLevelId = GetCurrentLevelId();
             RemoteDownedState? nearest = null;
-            double nearestDistSq = double.MaxValue;
             var x = me.spr?.x ?? 0;
             var y = me.spr?.y ?? 0;
+            var bestDistSq = double.MaxValue;
 
             foreach (var state in _remoteDowned.Values)
             {
                 if (state == null || state.UserId <= 0)
                     continue;
+
                 if (!string.IsNullOrEmpty(localLevelId) &&
                     !string.IsNullOrEmpty(state.LevelId) &&
                     !string.Equals(state.LevelId, localLevelId, StringComparison.Ordinal))
+                {
                     continue;
+                }
 
                 var dx = state.X - x;
                 var dy = state.Y - y;
@@ -1599,22 +1636,51 @@ namespace DeadCellsMultiplayerMod
                 if (distSq > ReviveUseDistancePx * ReviveUseDistancePx)
                     continue;
 
-                if (distSq < nearestDistSq)
+                if (distSq < bestDistSq)
                 {
-                    nearestDistSq = distSq;
+                    bestDistSq = distSq;
                     nearest = state;
                 }
             }
 
-            if (nearest == null)
+            return nearest;
+        }
+
+        private void ResetReviveHold()
+        {
+            _reviveHoldTargetId = 0;
+            _reviveHoldStartedTicks = 0;
+        }
+
+        private void ShowReviveHintFor(int userId)
+        {
+            if (_remoteDownedCines.Count == 0)
                 return;
 
-            if (!TryConsumeOneFlask(me))
+            foreach (var pair in _remoteDownedCines)
+            {
+                var cine = pair.Value;
+                if (cine == null || cine.destroyed)
+                    continue;
+
+                if (pair.Key == userId)
+                    cine.SetInteractionLabel(ReviveHintText);
+                else
+                    cine.SetInteractionLabel(null);
+            }
+        }
+
+        private void ClearReviveHints()
+        {
+            if (_remoteDownedCines.Count == 0)
                 return;
 
-            net.SendPlayerReviveRequest(nearest.UserId);
-            _remoteDowned.Remove(nearest.UserId);
-            _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
+            foreach (var cine in _remoteDownedCines.Values)
+            {
+                if (cine == null || cine.destroyed)
+                    continue;
+                cine.SetInteractionLabel(null);
+            }
         }
 
         private bool TryConsumeOneFlask(Hero hero)
@@ -1743,6 +1809,8 @@ namespace DeadCellsMultiplayerMod
             _postReviveLockUntilTicks = 0;
             _postReviveLockX = 0;
             _postReviveLockY = 0;
+            ResetReviveHold();
+            ClearReviveHints();
             _remoteDowned.Clear();
             DisposeAllRemoteDownedCines();
 

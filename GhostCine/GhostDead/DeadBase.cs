@@ -182,6 +182,7 @@ namespace DeadCellsMultiplayerMod
         private void HideHero()
         {
             try { _hero.visible = false; } catch { }
+            SetHeroHeadVisible(false);
         }
 
         private void EnsureViewportTracksHero(bool immediate)
@@ -219,6 +220,27 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             try { _hero.visible = _heroWasVisible; } catch { }
+            SetHeroHeadVisible(_heroWasVisible);
+        }
+
+        private void SetHeroHeadVisible(bool visible)
+        {
+            try
+            {
+                var head = _hero?.heroHead;
+                if (head == null)
+                    return;
+
+                try { head.parent?.set_visible(visible); } catch { }
+                try { head.customHeadSpr?.set_visible(visible); } catch { }
+                try { head.customBackSpr?.set_visible(visible); } catch { }
+                try { head.headNormalSb?.set_visible(visible); } catch { }
+                try { head.headAddSb?.set_visible(visible); } catch { }
+                try { head.eye?.set_visible(visible); } catch { }
+            }
+            catch
+            {
+            }
         }
 
         private void DisposeCorpse()
