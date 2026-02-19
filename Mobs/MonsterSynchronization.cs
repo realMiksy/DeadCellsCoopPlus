@@ -1043,7 +1043,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (entity == null)
                 return false;
 
-            if (entity is Hero || entity is KingSkin)
+            if (entity is Hero || entity is KingSkin && entity.visible == true)
                 return true;
 
             var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
