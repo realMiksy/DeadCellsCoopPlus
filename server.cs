@@ -283,8 +283,9 @@ public sealed class NetNode : IDisposable
         public readonly double X;
         public readonly double Y;
         public readonly int TargetUserId;
+        public readonly int Dir;
 
-        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId)
+        public MobAttack(int index, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId, int dir = 0)
         {
             Index = index;
             SkillId = skillId ?? string.Empty;
@@ -293,6 +294,7 @@ public sealed class NetNode : IDisposable
             X = x;
             Y = y;
             TargetUserId = targetUserId;
+            Dir = dir;
         }
     }
 
@@ -1818,7 +1820,11 @@ public sealed class NetNode : IDisposable
         if (parts.Length > 7)
             int.TryParse(parts[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out targetUserId);
 
-        attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId);
+        var dir = 0;
+        if (parts.Length > 8)
+            int.TryParse(parts[8], NumberStyles.Integer, CultureInfo.InvariantCulture, out dir);
+
+        attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         return true;
     }
 
@@ -2139,7 +2145,7 @@ public sealed class NetNode : IDisposable
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y},{attack.TargetUserId}\n");
+            $"MOBATK|{attack.Index},{encodedSkill},{(attack.RequiresTargetInArea ? 1 : 0)},{(hasData ? 1 : 0)},{dataPart},{attack.X},{attack.Y},{attack.TargetUserId},{attack.Dir}\n");
     }
 
     private static string BuildMobDieLine(MobDie die)
@@ -2673,7 +2679,7 @@ public sealed class NetNode : IDisposable
         _ = SendLineSafe(line);
     }
 
-    public void SendMobAttack(int mobIndex, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId)
+    public void SendMobAttack(int mobIndex, string skillId, bool requiresTargetInArea, int? data, double x, double y, int targetUserId, int dir = 0)
     {
         if (_role != NetRole.Host)
             return;
@@ -2682,7 +2688,7 @@ public sealed class NetNode : IDisposable
         if (mobIndex < 0 || string.IsNullOrWhiteSpace(skillId))
             return;
 
-        var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId);
+        var attack = new MobAttack(mobIndex, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         var line = BuildMobAttackLine(attack);
         _ = SendLineSafe(line);
     }

@@ -33,7 +33,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static readonly Dictionary<int, ClientMobState> clientMobTargets = new();
         private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
+        private static readonly Dictionary<int, int> clientAttackForcedDir = new();
         private static readonly Dictionary<int, long> hostContactAttackSendTick = new();
+        private static readonly Dictionary<int, QueuedOldSkillMarker> clientQueuedOldSkillMarkers = new();
         private static readonly Dictionary<int, int> clientLastReportedMobLife = new();
         private static readonly Dictionary<int, long> clientLastMobHitReportTick = new();
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
@@ -69,6 +71,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string OldSkillExecutePacketPrefix = "@oldexec:";
         private const string NewSkillExecutePacketPrefix = "@newexec:";
         private const double HostQueuedOldSkillMarkerSeconds = 3.0;
+        private const double ClientQueuedOldSkillMarkerSeconds = 0.4;
 
         private readonly struct QueuedOldSkillMarker
         {
@@ -516,8 +519,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var ownerMob = self?.owner as Mob;
             var skillId = self?.id?.ToString() ?? string.Empty;
-            
-            if (ownerMob == null || string.IsNullOrWhiteSpace(skillId) || ShouldSuppressOldExecutePacket(ownerMob, skillId))
+
+            if (ownerMob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
             TrySendHostMobAttack(ownerMob, OldSkillExecutePacketPrefix + skillId, false, null);
@@ -585,7 +588,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var targetUserId = ResolveHostTargetUserId(targetEntity, net!.id);
             var x = GetSyncX(mob);
             var y = GetSyncY(mob);
-            net.SendMobAttack(mobSyncId, skillId, requiresTargetInArea, data, x, y, targetUserId);
+            var dir = NormalizeDir(mob.dir);
+            net.SendMobAttack(mobSyncId, skillId, requiresTargetInArea, data, x, y, targetUserId, dir);
         }
 
         private void Hook_Mob_setNemesisTarget(Hook_Mob.orig_setNemesisTarget orig, Mob self, Entity e)
@@ -679,6 +683,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             trackedMobs.Clear();
             clientMobTargets.Clear();
             clientAttackUnlockUntilTick.Clear();
+            clientAttackForcedDir.Clear();
+            clientQueuedOldSkillMarkers.Clear();
             hostContactAttackSendTick.Clear();
             clientLastReportedMobLife.Clear();
             clientLastMobHitReportTick.Clear();
@@ -725,6 +731,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             ShiftDictionaryKeysLocked(clientMobTargets, deletedIndex);
             ShiftDictionaryKeysLocked(clientAttackUnlockUntilTick, deletedIndex);
+            ShiftDictionaryKeysLocked(clientAttackForcedDir, deletedIndex);
+            ShiftDictionaryKeysLocked(clientQueuedOldSkillMarkers, deletedIndex);
             ShiftDictionaryKeysLocked(hostContactAttackSendTick, deletedIndex);
             ShiftDictionaryKeysLocked(clientLastReportedMobLife, deletedIndex);
             ShiftDictionaryKeysLocked(clientLastMobHitReportTick, deletedIndex);
@@ -1457,7 +1465,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TrySetMobAttackTargetsExact(Mob mob, Entity target)
+        private static void TrySetMobAttackTargetsExact(Mob mob, Entity target, int attackDir = 0, bool forceAttackDir = false)
         {
             if (mob == null || target == null)
                 return;
@@ -1466,9 +1474,21 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 var mobX = GetWorldX(mob);
                 var targetX = GetWorldX(target);
-                var desiredDir = targetX < mobX ? -1 : targetX > mobX ? 1 : mob.dir;
-                if (desiredDir != 0)
-                    mob.dir = desiredDir;
+                var targetDir = targetX < mobX ? -1 : targetX > mobX ? 1 : mob.dir;
+
+                if (forceAttackDir)
+                {
+                    var normalized = NormalizeDir(attackDir);
+                    if (normalized != 0)
+                        mob.dir = normalized;
+                    else if (targetDir != 0)
+                        mob.dir = targetDir;
+                }
+                else
+                {
+                    if (targetDir != 0)
+                        mob.dir = targetDir;
+                }
             }
             catch
             {
@@ -1483,6 +1503,24 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             TrySetNemesisTargetExact(mob, target);
+
+            if (forceAttackDir)
+            {
+                try
+                {
+                    var mobX = GetWorldX(mob);
+                    var targetX = GetWorldX(target);
+                    var targetDir = targetX < mobX ? -1 : targetX > mobX ? 1 : mob.dir;
+                    var normalized = NormalizeDir(attackDir);
+                    if (normalized != 0)
+                        mob.dir = normalized;
+                    else if (targetDir != 0)
+                        mob.dir = targetDir;
+                }
+                catch
+                {
+                }
+            }
         }
 
         private static bool IsClientAttackUnlockActive(Mob mob)
@@ -1505,6 +1543,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return true;
 
             clientAttackUnlockUntilTick.Remove(localIndex);
+            clientAttackForcedDir.Remove(localIndex);
             return false;
         }
 
@@ -1869,13 +1908,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         mob = trackedMobs[localIndex];
                         var unlockTicks = (long)(Stopwatch.Frequency * ClientAttackUnlockSeconds);
                         clientAttackUnlockUntilTick[localIndex] = Stopwatch.GetTimestamp() + unlockTicks;
+                        var normalizedAttackDir = NormalizeDir(attack.Dir);
+                        if (normalizedAttackDir != 0)
+                            clientAttackForcedDir[localIndex] = normalizedAttackDir;
+                        else
+                            clientAttackForcedDir.Remove(localIndex);
                     }
                 }
 
                 if (mob == null)
                     continue;
 
-                TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId);
+                TryQueueClientMobAttack(mob, attack.SkillId, attack.RequiresTargetInArea, attack.Data, attack.TargetUserId, attack.Dir);
             }
         }
 
@@ -2024,32 +2068,32 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryQueueClientMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, int targetUserId)
+        private static void TryQueueClientMobAttack(Mob mob, string skillId, bool requiresTargetInArea, int? data, int targetUserId, int attackDir)
         {
             if (mob == null || string.IsNullOrWhiteSpace(skillId))
                 return;
 
             if (string.Equals(skillId, ContactAttackPacketSkillId, StringComparison.Ordinal))
             {
-                TryApplyClientContactAttack(mob, targetUserId);
+                TryApplyClientContactAttack(mob, targetUserId, attackDir);
                 return;
             }
 
             if (skillId.StartsWith(OldSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data, targetUserId);
+                TryExecuteClientOldSkill(mob, skillId[OldSkillExecutePacketPrefix.Length..], data, targetUserId, attackDir);
                 return;
             }
 
             if (skillId.StartsWith(NewSkillExecutePacketPrefix, StringComparison.Ordinal))
             {
-                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data, targetUserId);
+                TryExecuteClientNewSkill(mob, skillId[NewSkillExecutePacketPrefix.Length..], data, targetUserId, attackDir);
                 return;
             }
 
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId);
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
 
                 var haxeSkillId = skillId.AsHaxeString();
                 if (!mob.hasOldSkill(haxeSkillId))
@@ -2059,7 +2103,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                mob.queueAttack(oldSkill, requiresTargetInArea, data);
+                // Host already validated attack timing/target, so do not gate replay by client-side range checks.
+                mob.queueAttack(oldSkill, false, data);
+                if (IsClientOldSkillQueuedOrCharging(mob, oldSkill))
+                    RegisterClientQueuedOldSkillMarker(mob, skillId);
             }
             catch
             {
@@ -2073,8 +2120,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (oldSkill == null)
                         return;
 
+                    TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
                     try { oldSkill.prepare(data); } catch { }
                     oldSkill.execute(null);
+                    RegisterClientQueuedOldSkillMarker(mob, skillId);
                 }
                 catch
                 {
@@ -2082,14 +2131,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data, int targetUserId)
+        private static void TryExecuteClientOldSkill(Mob mob, string rawSkillId, int? data, int targetUserId, int attackDir)
         {
             if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
                 return;
 
+            if (ShouldSkipClientOldSkillExecuteFromMarker(mob, rawSkillId))
+                return;
+
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId);
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
 
                 var skillId = rawSkillId.AsHaxeString();
                 if (!mob.hasOldSkill(skillId))
@@ -2107,14 +2159,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data, int targetUserId)
+        private static void TryExecuteClientNewSkill(Mob mob, string rawSkillId, int? data, int targetUserId, int attackDir)
         {
             if (mob == null || string.IsNullOrWhiteSpace(rawSkillId))
                 return;
 
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId);
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
 
                 var skillId = rawSkillId.AsHaxeString();
                 var skill = mob.getSkill(skillId) as MobSkill;
@@ -2129,13 +2181,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TryApplyClientContactAttack(Mob mob, int targetUserId)
+        private static void TryApplyClientContactAttack(Mob mob, int targetUserId, int attackDir)
         {
             var target = ResolveClientAttackTargetEntity(mob, targetUserId);
             if (target == null)
                 return;
 
-            TrySetMobAttackTargetsExact(mob, target);
+            TrySetMobAttackTargetsExact(mob, target, attackDir, forceAttackDir: true);
             TryWakeMobForForcedSimulation(mob);
 
             try
@@ -2157,13 +2209,99 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId)
+        private static bool IsClientOldSkillQueuedOrCharging(Mob mob, OldMobSkill? expectedSkill)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var queued = mob.queuedOldSkill;
+                if (queued != null && queued.a != null)
+                {
+                    if (expectedSkill == null)
+                        return true;
+
+                    if (ReferenceEquals(queued.a, expectedSkill))
+                        return true;
+
+                    var queuedId = queued.a.id?.ToString() ?? string.Empty;
+                    var expectedId = expectedSkill.id?.ToString() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(queuedId) &&
+                        !string.IsNullOrWhiteSpace(expectedId) &&
+                        string.Equals(queuedId, expectedId, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (mob.hasSkillCharging())
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static void RegisterClientQueuedOldSkillMarker(Mob mob, string skillId)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(skillId))
+                return;
+
+            if (!TryGetTrackedIndex(mob, out var localIndex))
+                return;
+
+            lock (Sync)
+            {
+                clientQueuedOldSkillMarkers[localIndex] = new QueuedOldSkillMarker(skillId, Stopwatch.GetTimestamp());
+            }
+        }
+
+        private static bool ShouldSkipClientOldSkillExecuteFromMarker(Mob mob, string incomingSkillId)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(incomingSkillId))
+                return false;
+
+            if (!TryGetTrackedIndex(mob, out var localIndex))
+                return false;
+
+            QueuedOldSkillMarker marker;
+            var maxDeltaTicks = (long)(Stopwatch.Frequency * ClientQueuedOldSkillMarkerSeconds);
+            var nowTick = Stopwatch.GetTimestamp();
+
+            lock (Sync)
+            {
+                if (!clientQueuedOldSkillMarkers.TryGetValue(localIndex, out marker))
+                    return false;
+
+                if (nowTick - marker.Tick > maxDeltaTicks)
+                {
+                    clientQueuedOldSkillMarkers.Remove(localIndex);
+                    return false;
+                }
+            }
+
+            if (string.Equals(marker.SkillId, incomingSkillId, StringComparison.Ordinal))
+                return true;
+
+            return IsClientOldSkillQueuedOrCharging(mob, null);
+        }
+
+        private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir)
         {
             var target = ResolveClientAttackTargetEntity(mob, targetUserId);
             if (target == null)
                 return;
 
-            TrySetMobAttackTargetsExact(mob, target);
+            TrySetMobAttackTargetsExact(mob, target, attackDir, forceAttackDir: true);
         }
 
         private static Entity? ResolveClientAttackTargetEntity(Mob mob, int targetUserId)
@@ -2277,10 +2415,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             ClientMobState target;
+            var forcedDir = 0;
+            var useForcedDir = false;
             lock (Sync)
             {
                 if (!clientMobTargets.TryGetValue(localIndex, out target))
                     return;
+
+                var nowTick = Stopwatch.GetTimestamp();
+                if (IsClientAttackUnlockActiveLocked(localIndex, nowTick) &&
+                    clientAttackForcedDir.TryGetValue(localIndex, out var attackDir))
+                {
+                    forcedDir = NormalizeDir(attackDir);
+                    useForcedDir = forcedDir != 0;
+                }
             }
 
             var currentX = GetWorldX(self);
@@ -2323,7 +2471,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
             }
 
-            if (target.Dir != 0)
+            if (useForcedDir)
+                self.dir = forcedDir;
+            else if (target.Dir != 0)
                 self.dir = target.Dir;
 
             ApplyAuthoritativeLifeState(self, target.Life, target.MaxLife);
@@ -2381,16 +2531,29 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             ClientMobState target;
+            var forcedDir = 0;
+            var useForcedDir = false;
+            var attackUnlock = false;
             lock (Sync)
             {
                 if (!clientMobTargets.TryGetValue(localIndex, out target))
                     return;
+
+                var nowTick = Stopwatch.GetTimestamp();
+                attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
+                if (attackUnlock && clientAttackForcedDir.TryGetValue(localIndex, out var attackDir))
+                {
+                    forcedDir = NormalizeDir(attackDir);
+                    useForcedDir = forcedDir != 0;
+                }
             }
 
-            if (target.Dir != 0)
+            if (useForcedDir)
+                self.dir = forcedDir;
+            else if (target.Dir != 0)
                 self.dir = target.Dir;
 
-            if (IsClientAttackUnlockActive(self))
+            if (attackUnlock)
                 return;
 
             ApplyAnimPayload(self, target.AnimPayload);
