@@ -551,6 +551,30 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             }
 
+            if (e != null && ModEntry.IsEntityDownedForCombat(e))
+            {
+                try
+                {
+                    var team = self?._team;
+                    var helper = team?.get_targetHelper();
+                    if (helper != null)
+                    {
+                        helper.filterUntargetables();
+                        var best = helper.getBest();
+                        if (best != null && !ModEntry.IsEntityDownedForCombat(best))
+                        {
+                            orig(self, best);
+                            return;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+
+                return;
+            }
+
             var gameHero = ModCore.Modules.Game.Instance?.HeroInstance;
             if (gameHero != null && ReferenceEquals(e, gameHero))
             {
@@ -562,7 +586,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     {
                         helper.filterUntargetables();
                         var best = helper.getBest();
-                        if (best != null)
+                        if (best != null && !ModEntry.IsEntityDownedForCombat(best))
                         {
                             orig(self, best);
                             return;
@@ -952,6 +976,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             if (ReferenceEquals(candidate, mob))
                 return;
+            if (ModEntry.IsEntityDownedForCombat(candidate))
+                return;
 
             try
             {
@@ -989,6 +1015,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             if (target == null || localUserId <= 0)
                 return 0;
+            if (ModEntry.IsEntityDownedForCombat(target))
+                return 0;
 
             var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
             if (localHero != null && ReferenceEquals(target, localHero))
@@ -1014,12 +1042,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static Entity? ResolveMobAttackTargetEntity(Mob mob, Entity? explicitTarget)
         {
-            if (explicitTarget != null)
+            if (explicitTarget != null && IsPlayerCombatTargetEntity(explicitTarget))
                 return explicitTarget;
 
             try
             {
-                if (mob.aTarget != null)
+                if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
                     return mob.aTarget;
             }
             catch
@@ -1028,7 +1056,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (mob.nemesisTarget != null)
+                if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
                     return mob.nemesisTarget;
             }
             catch
@@ -1041,6 +1069,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static bool IsPlayerCombatTargetEntity(Entity entity)
         {
             if (entity == null)
+                return false;
+            if (ModEntry.IsEntityDownedForCombat(entity))
                 return false;
 
             if (entity is Hero || entity is KingSkin && entity.visible == true)
@@ -1850,12 +1880,17 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (localId > 0)
                 {
                     if (targetUserId == localId)
-                        return ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+                    {
+                        var localHero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+                        if (localHero != null && !ModEntry.IsEntityDownedForCombat(localHero))
+                            return localHero;
+                        return null;
+                    }
 
                     if (ModEntry.TryGetClientIndex(localId, targetUserId, out var index))
                     {
                         var client = ModEntry.clients[index];
-                        if (client != null)
+                        if (client != null && !ModEntry.IsEntityDownedForCombat(client))
                             return client;
                     }
                 }
@@ -1863,7 +1898,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (mob.aTarget != null)
+                if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
                     return mob.aTarget;
             }
             catch
@@ -1872,7 +1907,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                if (mob.nemesisTarget != null)
+                if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
                     return mob.nemesisTarget;
             }
             catch
@@ -1912,6 +1947,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 var candidate = candidates[i];
                 if (candidate == null || ReferenceEquals(candidate, mob))
+                    continue;
+                if (ModEntry.IsEntityDownedForCombat(candidate))
                     continue;
 
                 try

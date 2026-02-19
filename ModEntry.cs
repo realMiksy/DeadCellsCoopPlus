@@ -176,6 +176,54 @@ namespace DeadCellsMultiplayerMod
             return Instance != null && Instance._localFakeDead;
         }
 
+        internal static bool IsRemotePlayerDowned(int userId)
+        {
+            var instance = Instance;
+            if (instance == null || userId <= 0)
+                return false;
+
+            if (!instance._remoteDowned.TryGetValue(userId, out var state) || state == null)
+                return false;
+
+            var localLevelId = instance.GetCurrentLevelId();
+            if (!string.IsNullOrEmpty(localLevelId) &&
+                !string.IsNullOrEmpty(state.LevelId) &&
+                !string.Equals(localLevelId, state.LevelId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool IsEntityDownedForCombat(Entity? entity)
+        {
+            if (entity == null)
+                return false;
+
+            var localHero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero != null && ReferenceEquals(entity, localHero))
+                return IsLocalPlayerDowned();
+
+            var net = _net;
+            var localId = net?.id ?? 0;
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client == null || !ReferenceEquals(entity, client))
+                    continue;
+
+                var remoteId = clientIds[i];
+                if (remoteId <= 0)
+                    return false;
+                if (localId > 0 && remoteId == localId)
+                    return IsLocalPlayerDowned();
+                return IsRemotePlayerDowned(remoteId);
+            }
+
+            return false;
+        }
+
         internal static GhostKing? GetPrimaryClient()
         {
             for (int i = 0; i < clients.Length; i++)
@@ -1005,6 +1053,7 @@ namespace DeadCellsMultiplayerMod
             DeadCellsMultiplayerMod.Mobs.MobsSynchronization.MobsSynchronization.ClearTrackingForLevelChange();
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             me = self;
+            try { me._targetable = true; } catch { }
             SendLevel(levelId);
             orig(self, oldLevel);
             if (_netRole == NetRole.None) return;
@@ -1052,6 +1101,7 @@ namespace DeadCellsMultiplayerMod
         public void hook_hero_wakeup(Hook_Hero.orig_wakeup orig, Hero self, Level lvl, int cx, int cy)
         {
             me = self;
+            try { me._targetable = true; } catch { }
             orig(self, lvl, cx, cy);
             SendEquippedWeapons(self.inventory);
         }
@@ -1132,6 +1182,15 @@ namespace DeadCellsMultiplayerMod
 
                 if (!state.IsDowned)
                 {
+                    if (TryGetClientIndex(localId, state.UserId, out var revivedIdx))
+                    {
+                        var revivedClient = clients[revivedIdx];
+                        if (revivedClient != null)
+                        {
+                            try { revivedClient._targetable = true; } catch { }
+                        }
+                    }
+
                     _remoteDowned.Remove(state.UserId);
                     _downedAnnouncements.Remove(state.UserId);
                     DisposeRemoteDownedCine(state.UserId);
@@ -1154,6 +1213,15 @@ namespace DeadCellsMultiplayerMod
                 existing.Y = state.Y;
                 existing.LevelId = state.LevelId ?? string.Empty;
                 existing.UpdatedAtTicks = Stopwatch.GetTimestamp();
+
+                if (TryGetClientIndex(localId, state.UserId, out var downedIdx))
+                {
+                    var downedClient = clients[downedIdx];
+                    if (downedClient != null)
+                    {
+                        try { downedClient._targetable = false; } catch { }
+                    }
+                }
             }
         }
 
@@ -1279,6 +1347,14 @@ namespace DeadCellsMultiplayerMod
             if (_remoteDowned.Count == 0)
             {
                 DisposeAllRemoteDownedCines();
+                for (int i = 0; i < clients.Length; i++)
+                {
+                    var client = clients[i];
+                    if (client != null)
+                    {
+                        try { client._targetable = true; } catch { }
+                    }
+                }
                 return;
             }
 
@@ -1315,6 +1391,7 @@ namespace DeadCellsMultiplayerMod
                 if (cine != null)
                     cine.UpdateTarget(state.X, state.Y, client.dir);
 
+                try { client._targetable = false; } catch { }
                 try { client.setPosPixel(state.X, state.Y - DownedGhostBodyYOffsetPx); } catch { }
 
                 rLastX[index] = state.X;
@@ -1456,6 +1533,7 @@ namespace DeadCellsMultiplayerMod
             }
             catch { }
 
+            try { hero._targetable = false; } catch { }
             try { hero.cancelVelocities(); } catch { }
             try { hero.lockControlsS(10.0); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
@@ -1490,6 +1568,7 @@ namespace DeadCellsMultiplayerMod
             try { me.cancelVelocities(); } catch { }
             try { me.lockControlsS(0.25); } catch { }
             try { me.cancelSkillControlLock(); } catch { }
+            try { me._targetable = false; } catch { }
 
             var cine = _localDeadCine;
             if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
@@ -1584,6 +1663,7 @@ namespace DeadCellsMultiplayerMod
             try { hero.cancelVelocities(); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
             try { hero.unlockControls(); } catch { }
+            try { hero._targetable = true; } catch { }
 
             try
             {
@@ -1889,11 +1969,20 @@ namespace DeadCellsMultiplayerMod
             _remoteDowned.Clear();
             _downedAnnouncements.Clear();
             DisposeAllRemoteDownedCines();
+            for (int i = 0; i < clients.Length; i++)
+            {
+                var client = clients[i];
+                if (client != null)
+                {
+                    try { client._targetable = true; } catch { }
+                }
+            }
 
             if (unlockLocalHero && me != null)
             {
                 try { me.cancelSkillControlLock(); } catch { }
                 try { me.unlockControls(); } catch { }
+                try { me._targetable = true; } catch { }
             }
 
             if (sendNetworkUpState && wasFakeDead && _net != null && _netRole != NetRole.None)
@@ -2100,7 +2189,14 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 if (useDownedOffset)
+                {
                     drawY -= DownedGhostBodyYOffsetPx;
+                    try { client._targetable = false; } catch { }
+                }
+                else
+                {
+                    try { client._targetable = true; } catch { }
+                }
 
                 client.setPosPixel(drawX, drawY);
                 client.dir = remote.Dir;

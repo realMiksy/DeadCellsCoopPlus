@@ -16,6 +16,10 @@ namespace DeadCellsMultiplayerMod
         private HeroDeadCorpse? _corpse;
         private bool _hadGhostVisibleState;
         private bool _ghostWasVisible;
+        private bool _hadTemplateHeroVisibleState;
+        private bool _templateHeroWasVisible;
+        private bool _hadTemplateHeroHeadBlackState;
+        private int _templateHeroHeadBlackValue;
         private bool _cineSuppressed;
         private bool _lethalFallStarted;
         private bool _hasTarget;
@@ -36,8 +40,10 @@ namespace DeadCellsMultiplayerMod
             cancellable = false;
             SuppressCineEffects();
             CaptureGhostVisibility();
+            CaptureTemplateHeroVisibility();
             HideGhost();
             CreateCorpse();
+            EnsureTemplateHeroVisible();
             UpdateTarget(x, y, dir);
             EnsureViewportTracksTemplateHero(immediate: true);
         }
@@ -113,6 +119,7 @@ namespace DeadCellsMultiplayerMod
             RestoreCineState();
             DisposeCorpse();
             RestoreGhostVisibility();
+            RestoreTemplateHeroVisibility();
             EnsureViewportTracksTemplateHero(immediate: true);
         }
 
@@ -145,6 +152,7 @@ namespace DeadCellsMultiplayerMod
                 ApplyTargetToCorpse(forceStartFall: true);
                 ApplyInteractionLabel();
                 EnsureCorpsePointer();
+                EnsureTemplateHeroVisible();
             }
             catch
             {
@@ -446,6 +454,82 @@ namespace DeadCellsMultiplayerMod
             try { _ghostWasVisible = _ghost.visible; }
             catch { _ghostWasVisible = true; }
             _hadGhostVisibleState = true;
+        }
+
+        private void CaptureTemplateHeroVisibility()
+        {
+            if (_hadTemplateHeroVisibleState || _templateHero == null)
+                return;
+
+            try { _templateHeroWasVisible = _templateHero.visible; }
+            catch { _templateHeroWasVisible = true; }
+            _hadTemplateHeroVisibleState = true;
+
+            try
+            {
+                var head = _templateHero.heroHead;
+                if (head != null)
+                {
+                    _templateHeroHeadBlackValue = head.headBlack;
+                    _hadTemplateHeroHeadBlackState = true;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private void EnsureTemplateHeroVisible()
+        {
+            if (_templateHero == null || _templateHero.destroyed)
+                return;
+            if (ModEntry.IsLocalPlayerDowned())
+                return;
+
+            try { _templateHero.visible = true; } catch { }
+            SetTemplateHeroHeadVisible(true);
+        }
+
+        private void RestoreTemplateHeroVisibility()
+        {
+            if (_templateHero == null || _templateHero.destroyed || !_hadTemplateHeroVisibleState)
+                return;
+            if (ModEntry.IsLocalPlayerDowned())
+                return;
+
+            try { _templateHero.visible = _templateHeroWasVisible; } catch { }
+            SetTemplateHeroHeadVisible(_templateHeroWasVisible);
+        }
+
+        private void SetTemplateHeroHeadVisible(bool visible)
+        {
+            var hero = _templateHero;
+            if (hero == null)
+                return;
+
+            try
+            {
+                var head = hero.heroHead;
+                if (head == null)
+                    return;
+
+                try { head.customHeadSpr?.set_visible(visible); } catch { }
+                try { head.customBackSpr?.set_visible(visible); } catch { }
+                try { head.headNormalSb?.set_visible(visible); } catch { }
+                try { head.headAddSb?.set_visible(visible); } catch { }
+                if (visible && _hadTemplateHeroHeadBlackState)
+                {
+                    try { head.headBlack = _templateHeroHeadBlackValue; } catch { }
+                }
+                else
+                {
+                    try { head.headBlack = 0; } catch { }
+                }
+                try { head.eye?.set_visible(visible); } catch { }
+            }
+            catch
+            {
+            }
         }
 
         private void RestoreGhostVisibility()
