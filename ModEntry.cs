@@ -1114,6 +1114,7 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
+            UpdateReviveHintsByProximity();
             ProcessReviveHold(net);
         }
 
@@ -1619,7 +1620,6 @@ namespace DeadCellsMultiplayerMod
             if (!isHoldPressed)
             {
                 ResetReviveHold();
-                ClearReviveHints();
                 return;
             }
 
@@ -1627,7 +1627,6 @@ namespace DeadCellsMultiplayerMod
             if (nearest == null)
             {
                 ResetReviveHold();
-                ClearReviveHints();
                 return;
             }
 
@@ -1663,6 +1662,24 @@ namespace DeadCellsMultiplayerMod
             _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
             ResetReviveHold();
             ClearReviveHints();
+        }
+
+        private void UpdateReviveHintsByProximity()
+        {
+            if (me == null || _remoteDowned.Count == 0)
+            {
+                ClearReviveHints();
+                return;
+            }
+
+            var nearest = FindNearestReviveTarget();
+            if (nearest == null)
+            {
+                ClearReviveHints();
+                return;
+            }
+
+            ShowReviveHintFor(nearest.UserId);
         }
 
         private RemoteDownedState? FindNearestReviveTarget()
