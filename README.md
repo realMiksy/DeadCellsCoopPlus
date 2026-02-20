@@ -20,6 +20,16 @@ one player hosts a server, another connects — and both players can **play thro
 
 ---
 
+## ⭐ Support the Project
+
+If you find this project interesting:
+- ⭐ Star the repository  
+- 🍴 Fork the project and experiment  
+
+Every bit of feedback helps improve multiplayer support for **Dead Cells**.
+
+---
+
 ## 🧰 Requirements
 
 - **Dead Cells (PC)**
@@ -30,16 +40,46 @@ one player hosts a server, another connects — and both players can **play thro
 
 ## 📦 Installation
 
-### 1️⃣ Install Dead Cells Core Modding API (DCCM)
+## 1️⃣ Install Dead Cells Core Modding API (DCCM)
 
-Download the latest version of DCCM from the official repository:  
-https://github.com/dead-cells-core-modding/core
+### 🔹 Steam version
 
-Follow the installation instructions provided on the repository page.
-P.S. You can download the **non-MDK version** if you don’t plan to create mods yourself.
+If you are using the **Steam version** of the game, follow the official installation guide:
+
+👉 [https://dead-cells-core-modding.github.io/docs/docs/tutorial/install-workshop/](https://dead-cells-core-modding.github.io/docs/docs/tutorial/install-workshop/)
+
+This method will automatically install and keep DCCM up to date.
+
 ---
 
-### 2️⃣ Install DeadCellsMultiplayerMod
+### 🔹 Non-Steam version
+
+If you are using a **non-Steam version** of Dead Cells:
+
+1. Download the latest release of **DCCM** from the official repository:
+   👉 [https://github.com/dead-cells-core-modding/core](https://github.com/dead-cells-core-modding/core)
+
+2. Open your Dead Cells game directory.
+
+3. Create a folder named `coremod`.
+
+4. Extract the downloaded DCCM files into the `coremod` folder.
+
+---
+
+## 2️⃣ Install DeadCellsMultiplayerMod
+
+### 🔹 Steam version
+
+If you are using the **Steam version** of the game:
+1. Open [https://steamcommunity.com/sharedfiles/filedetails/?id=3655044722](https://steamcommunity.com/sharedfiles/filedetails/?id=3657857836)
+2. Install the mod in one click.
+
+---
+
+### 🔹 Non-Steam version(DCCM doesn't support non-steam play now)
+
+If you are using a **non-Steam version** of Dead Cells:
 
 1. Navigate to your **DCCM directory**
 2. Create a folder named `mods` (if it doesn’t exist)
@@ -83,8 +123,8 @@ On the first launch, required configuration files will be generated automaticall
 - [x] Synchronize new game world data  
 - [x] Add player ghost animations  
 - [x] Improve ghost animation quality  
-- [ ] Synchronize level generation  
-- [ ] Synchronize enemies  
+- [x] Synchronize level generation  
+- [x] Synchronize enemies  
 - [ ] Synchronize bosses  
 - [ ] Implement death handling for ghost player  
 
@@ -97,13 +137,6 @@ On the first launch, required configuration files will be generated automaticall
 
 ---
 
-## ⭐ Support the Project
-
-If you find this project interesting:
-- ⭐ Star the repository  
-- 🍴 Fork the project and experiment  
-
-Every bit of feedback helps improve multiplayer support for **Dead Cells**.
 
 
 <!--
