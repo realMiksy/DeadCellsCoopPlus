@@ -1,0 +1,53 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"POT-Creation-Date: 2025-11-29 12:26+0800\n"
+"PO-Revision-Date: 2026-02-20 20:30+0700\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.8\n"
+
+#: Modules/Game.cs:87
+msgid "DeadCellsMultiplayerMod"
+msgstr "DeadCellsMultiplayerMod"
+
+#: ConnectionUI.cs 278
+msgid "Lobby menu"
+msgstr "Menú del lobby"
+
+msgid "{0} connected to the server."
+msgstr "{0} se conectó al servidor."
+
+msgid "{0} disconnected from the server."
+msgstr "{0} se desconectó del servidor."
+
+msgid "Host disconnected from server."
+msgstr "El anfitrión se desconectó del servidor."
+
+msgid "Back to menu in {0}..."
+msgstr "Volviendo al menú en {0}..."
+
+msgid "{0} reached the exit to {1}"
+msgstr "{0} alcanzó la salida hacia {1}"
+
+msgid "next area"
+msgstr "siguiente área"
+
+msgid "Guest"
+msgstr "Invitado"
+
+msgid "Player {0}"
+msgstr "Jugador {0}"
+
+msgid "{0} fell!"
+msgstr "¡{0} cayó!"
+
+msgid "Hold R to restore"
+msgstr "Mantén R para restaurar"
+
+msgid "Game Over"
+msgstr "Fin del juego"
