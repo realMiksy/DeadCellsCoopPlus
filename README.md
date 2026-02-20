@@ -124,9 +124,10 @@ On the first launch, required configuration files will be generated automaticall
 - [x] Add player ghost animations  
 - [x] Improve ghost animation quality  
 - [x] Synchronize level generation  
-- [x] Synchronize enemies  
+- [x] Synchronize enemies
+- [x] Implement death handling for ghost player
+- [ ] Implement more interactions
 - [ ] Synchronize bosses  
-- [ ] Implement death handling for ghost player  
 
 ---
 
