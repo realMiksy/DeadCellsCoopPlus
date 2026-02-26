@@ -35,6 +35,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, ClientMobState> clientMobTargets = new();
         private static readonly Dictionary<int, long> clientAttackUnlockUntilTick = new();
         private static readonly Dictionary<int, int> clientAttackForcedDir = new();
+        private static readonly Dictionary<int, long> clientAttackForcedDirUntilTick = new();
         private static readonly Dictionary<int, long> hostContactAttackSendTick = new();
         private static readonly Dictionary<int, QueuedOldSkillMarker> clientQueuedOldSkillMarkers = new();
         private static readonly Dictionary<int, int> clientLastReportedMobLife = new();
@@ -62,6 +63,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientInterpolationAlpha = 0.7;
         private const double ClientAiLockSeconds = 0.3;
         private const double ClientAttackUnlockSeconds = 2.2;
+        private const double ClientAttackForcedDirSeconds = 0.22;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double ClientMobHitReportMinIntervalSeconds = 0.05;
         private const double ClientAnimSpeedEpsilon = 0.05;
@@ -909,6 +911,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientMobTargets.Clear();
             clientAttackUnlockUntilTick.Clear();
             clientAttackForcedDir.Clear();
+            clientAttackForcedDirUntilTick.Clear();
             clientQueuedOldSkillMarkers.Clear();
             hostContactAttackSendTick.Clear();
             hostAttackRetargetLockUntilTick.Clear();
@@ -967,6 +970,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             ShiftDictionaryKeysLocked(clientMobTargets, deletedIndex);
             ShiftDictionaryKeysLocked(clientAttackUnlockUntilTick, deletedIndex);
             ShiftDictionaryKeysLocked(clientAttackForcedDir, deletedIndex);
+            ShiftDictionaryKeysLocked(clientAttackForcedDirUntilTick, deletedIndex);
             ShiftDictionaryKeysLocked(clientQueuedOldSkillMarkers, deletedIndex);
             ShiftDictionaryKeysLocked(hostContactAttackSendTick, deletedIndex);
             ShiftDictionaryKeysLocked(hostAttackRetargetLockUntilTick, deletedIndex);
@@ -1756,19 +1760,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var nowTick = Stopwatch.GetTimestamp();
                 if (hostAttackRetargetLockUntilTick.TryGetValue(localIndex, out var until))
                 {
-                    if (nowTick <= until)
-                        return true;
-
-                    hostAttackRetargetLockUntilTick.Remove(localIndex);
+                    if (nowTick > until)
+                        hostAttackRetargetLockUntilTick.Remove(localIndex);
                 }
 
                 if (hostQueuedOldSkillMarkers.TryGetValue(localIndex, out var marker))
                 {
                     var maxDeltaTicks = (long)(Stopwatch.Frequency * HostQueuedOldSkillMarkerSeconds);
-                    if (nowTick - marker.Tick <= maxDeltaTicks)
-                        return true;
-
-                    hostQueuedOldSkillMarkers.Remove(localIndex);
+                    if (nowTick - marker.Tick > maxDeltaTicks)
+                        hostQueuedOldSkillMarkers.Remove(localIndex);
                 }
             }
 
@@ -2008,8 +2008,31 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return true;
 
             clientAttackUnlockUntilTick.Remove(localIndex);
-            clientAttackForcedDir.Remove(localIndex);
             return false;
+        }
+
+        private static bool TryGetClientForcedDirLocked(int localIndex, long nowTick, out int dir)
+        {
+            dir = 0;
+            if (!clientAttackForcedDir.TryGetValue(localIndex, out var rawDir))
+                return false;
+
+            if (clientAttackForcedDirUntilTick.TryGetValue(localIndex, out var until) && nowTick > until)
+            {
+                clientAttackForcedDir.Remove(localIndex);
+                clientAttackForcedDirUntilTick.Remove(localIndex);
+                return false;
+            }
+
+            dir = NormalizeDir(rawDir);
+            if (dir == 0)
+            {
+                clientAttackForcedDir.Remove(localIndex);
+                clientAttackForcedDirUntilTick.Remove(localIndex);
+                return false;
+            }
+
+            return true;
         }
 
         private static int NormalizeDir(int dir)
@@ -2404,13 +2427,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     {
                         mob = trackedMobs[localIndex];
                         var unlockTicks = (long)(Stopwatch.Frequency * ClientAttackUnlockSeconds);
+                        var forcedDirTicks = (long)(Stopwatch.Frequency * ClientAttackForcedDirSeconds);
                         var nowTick = Stopwatch.GetTimestamp();
                         clientAttackUnlockUntilTick[localIndex] = nowTick + unlockTicks;
                         var normalizedAttackDir = NormalizeDir(attack.Dir);
                         if (normalizedAttackDir != 0)
+                        {
                             clientAttackForcedDir[localIndex] = normalizedAttackDir;
+                            clientAttackForcedDirUntilTick[localIndex] = nowTick + forcedDirTicks;
+                        }
                         else
+                        {
                             clientAttackForcedDir.Remove(localIndex);
+                            clientAttackForcedDirUntilTick.Remove(localIndex);
+                        }
                     }
                 }
 
@@ -2966,7 +2996,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 var nowTick = Stopwatch.GetTimestamp();
                 if (IsClientAttackUnlockActiveLocked(localIndex, nowTick) &&
-                    clientAttackForcedDir.TryGetValue(localIndex, out var attackDir))
+                    TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
                 {
                     forcedDir = NormalizeDir(attackDir);
                     useForcedDir = forcedDir != 0;
@@ -3087,7 +3117,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 var nowTick = Stopwatch.GetTimestamp();
                 attackUnlock = IsClientAttackUnlockActiveLocked(localIndex, nowTick);
-                if (attackUnlock && clientAttackForcedDir.TryGetValue(localIndex, out var attackDir))
+                if (attackUnlock && TryGetClientForcedDirLocked(localIndex, nowTick, out var attackDir))
                 {
                     forcedDir = NormalizeDir(attackDir);
                     useForcedDir = forcedDir != 0;
