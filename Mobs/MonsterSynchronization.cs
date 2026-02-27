@@ -15,7 +15,6 @@ using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using Hashlink.Virtuals;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game;
-using ModCore.Modules;
 using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
@@ -535,18 +534,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     x, y, dir, life, maxLife, animPayload, mobType, statePayload);
             }
 
-            net.SendMobStates(one);
-        }
-
-        private static void TrySendHostMobStateDeltaPreUpdate(NetNode net, Mob mob)
-        {
-            if (!IsHost(net) || mob == null)
-                return;
-
-            if (!TryBuildHostMobStateDeltaSnapshot(mob, out var snapshot))
-                return;
-
-            var one = new List<NetNode.MobStateSnapshot>(1) { snapshot };
             net.SendMobStates(one);
         }
 
@@ -1525,11 +1512,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return ShouldRunNetPumpForFrame(mob, isClientPump: true);
         }
 
-        private static bool ShouldRunHostNetPumpForFrame(Mob mob)
-        {
-            return ShouldRunNetPumpForFrame(mob, isClientPump: false);
-        }
-
         private static bool ShouldRunHostStateDeltaPumpForFrame(Mob mob)
         {
             var level = mob._level ?? currentLevel;
@@ -1873,32 +1855,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return false;
-        }
-
-        private static bool ShouldSuppressOldExecutePacket(Mob ownerMob, string skillId)
-        {
-            if (ownerMob == null || string.IsNullOrWhiteSpace(skillId))
-                return false;
-
-            if (!TryGetTrackedIndex(ownerMob, out var mobIndex))
-                return false;
-
-            lock (Sync)
-            {
-                if (!hostQueuedOldSkillMarkers.TryGetValue(mobIndex, out var marker))
-                    return false;
-
-                var maxDeltaTicks = (long)(Stopwatch.Frequency * HostQueuedOldSkillMarkerSeconds);
-                if (!string.Equals(marker.SkillId, skillId, StringComparison.Ordinal) ||
-                    Stopwatch.GetTimestamp() - marker.Tick > maxDeltaTicks)
-                {
-                    hostQueuedOldSkillMarkers.Remove(mobIndex);
-                    return false;
-                }
-
-                hostQueuedOldSkillMarkers.Remove(mobIndex);
-                return true;
-            }
         }
 
         private static void TrySetNemesisTargetExact(Mob mob, Entity target)
@@ -2273,55 +2229,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TrySendHostMobStates(NetNode net)
-        {
-            var now = Stopwatch.GetTimestamp();
-            var minDelta = (long)(Stopwatch.Frequency / HostStateSendRateHz);
-            if (lastHostStateSendTick != 0 && now - lastHostStateSendTick < minDelta)
-                return;
-            lastHostStateSendTick = now;
-
-            List<NetNode.MobStateSnapshot> states = new();
-            lock (Sync)
-            {
-                PruneInvalidTrackedMobsLocked();
-                for (int i = 0; i < trackedMobs.Count; i++)
-                {
-                    var mob = trackedMobs[i];
-                    if (mob == null)
-                        continue;
-
-                    if (!TryGetMobSyncId(mob, out var mobSyncId))
-                        continue;
-
-                    bool isOutOfGame;
-                    try
-                    {
-                        isOutOfGame = mob.isOutOfGame;
-                    }
-                    catch
-                    {
-                        isOutOfGame = false;
-                    }
-
-                    var x = GetWorldX(mob);
-                    var y = GetWorldY(mob);
-                    var dir = NormalizeDir(mob.dir);
-                    var life = mob.life;
-                    var maxLife = mob.maxLife;
-                    var animPayload = BuildAnimPayload(mob);
-                    
-                    var mobType = BuildMobStateTypeSignature(mob);
-                    var statePayload = BuildMobAffectStatePayload(mob);
-
-                    states.Add(new NetNode.MobStateSnapshot(mobSyncId, x, y, dir, life, maxLife, animPayload, mobType, statePayload));
-                }
-            }
-
-            if (states.Count > 0)
-                net.SendMobStates(states);
-        }
-
         private static void ConsumeIncomingHostMobStates(NetNode net)
         {
             if (!net.TryConsumeMobStates(out var states))
@@ -2339,7 +2246,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
-                var nowTick = Stopwatch.GetTimestamp();
                 var usedLocalIndices = new HashSet<int>();
 
                 foreach (var state in states)
@@ -2700,7 +2606,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
                 {
-                    try { oldSkill.prepare(data); } catch { }
+                    oldSkill.prepare(data);
                 }
             }
             catch
@@ -2715,27 +2621,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                dynamic dyn = oldSkill;
-                var cb = dyn.dynOnChargeComplete;
+                var cb = oldSkill.dynOnChargeComplete;
                 if (cb != null)
                 {
                     cb.Invoke();
-                    return;
                 }
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                var prop = oldSkill.GetType().GetProperty("dynOnChargeComplete");
-                var cb = prop?.GetValue(oldSkill);
-                if (cb == null)
-                    return;
-
-                var invoke = cb.GetType().GetMethod("Invoke", System.Type.EmptyTypes);
-                invoke?.Invoke(cb, null);
             }
             catch
             {
@@ -2773,7 +2663,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (skill == null)
                     return;
 
-                try { skill.prepare(data); } catch { }
+                skill.prepare(data);
                 skill.execute(null);
             }
             catch
@@ -2788,30 +2678,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                dynamic dyn = oldSkill;
-                dyn.prepareOnOwnerTarget(true, data);
-                return true;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                var mi = oldSkill.GetType().GetMethod("prepareOnOwnerTarget");
-                if (mi == null)
-                    return false;
-
-                var parameters = mi.GetParameters();
-                object?[] args;
-                if (parameters.Length >= 2)
-                    args = new object?[] { true, data };
-                else if (parameters.Length == 1)
-                    args = new object?[] { true };
-                else
-                    args = Array.Empty<object?>();
-
-                mi.Invoke(oldSkill, args);
+                oldSkill.prepareOnOwnerTarget(true, data);
                 return true;
             }
             catch
@@ -2931,23 +2798,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 skillId = string.Empty;
                 return false;
-            }
-        }
-
-        private static void TryResetQueuedOldSkillIfMatches(Mob mob, string expectedSkillId)
-        {
-            if (mob == null || string.IsNullOrWhiteSpace(expectedSkillId))
-                return;
-
-            if (!IsQueuedOldSkillId(mob, expectedSkillId))
-                return;
-
-            try
-            {
-                mob.resetQueuedOldSkill();
-            }
-            catch
-            {
             }
         }
 
