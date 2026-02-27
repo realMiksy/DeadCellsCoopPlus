@@ -355,15 +355,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
             }
 
-            EnsureMobTracked(self);
             orig(self);
-
-            if (IsSyncMob(self) && ShouldRunHostNetPumpForFrame(self))
-            {
-                ConsumeIncomingMobDraws(net!);
-                ConsumeIncomingMobDies(net!);
-                ConsumeIncomingMobHits(net!);
-            }
         }
 
         private static void Hook_Mob_onDie(Hook_Mob.orig_onDie orig, Mob self)
@@ -560,6 +552,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net))
                 return;
 
+            var now = Stopwatch.GetTimestamp();
+            var minDelta = (long)(Stopwatch.Frequency / HostStateSendRateHz);
+            if (lastHostStateSendTick != 0 && now - lastHostStateSendTick < minDelta)
+                return;
+            lastHostStateSendTick = now;
+
             List<Mob> mobs;
             lock (Sync)
             {
@@ -606,19 +604,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var maxLife = mob.maxLife;
             var mobType = BuildMobStateTypeSignature(mob);
             var statePayload = BuildMobAffectStatePayload(mob);
-
-            var suppressAttackAnim = ShouldSuppressHostMobAnimSync(mob);
-            var liveAnimPayload = BuildAnimPayload(mob);
+            var animPayload = BuildAnimPayload(mob);
 
             HostMobSentState previous;
             var hadPrevious = false;
-            var animPayload = liveAnimPayload;
 
             lock (Sync)
             {
                 hadPrevious = hostLastSentMobStatesBySyncId.TryGetValue(mobSyncId, out previous);
-                if (suppressAttackAnim && hadPrevious)
-                    animPayload = previous.AnimPayload;
             }
 
             var current = new HostMobSentState(x, y, dir, life, maxLife, animPayload, mobType, statePayload);
@@ -1750,49 +1743,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static bool ShouldSuppressHostMobAnimSync(Mob mob)
-        {
-            if (mob == null || !TryGetTrackedIndex(mob, out var localIndex))
-                return false;
-
-            lock (Sync)
-            {
-                var nowTick = Stopwatch.GetTimestamp();
-                if (hostAttackRetargetLockUntilTick.TryGetValue(localIndex, out var until))
-                {
-                    if (nowTick > until)
-                        hostAttackRetargetLockUntilTick.Remove(localIndex);
-                }
-
-                if (hostQueuedOldSkillMarkers.TryGetValue(localIndex, out var marker))
-                {
-                    var maxDeltaTicks = (long)(Stopwatch.Frequency * HostQueuedOldSkillMarkerSeconds);
-                    if (nowTick - marker.Tick > maxDeltaTicks)
-                        hostQueuedOldSkillMarkers.Remove(localIndex);
-                }
-            }
-
-            try
-            {
-                if (mob.queuedOldSkill?.a != null)
-                    return true;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                if (mob.hasSkillCharging())
-                    return true;
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
         private static bool IsMobHostileToPlayers(Mob? mob)
         {
             if (mob == null)
@@ -2621,7 +2571,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
+                if (IsQueuedOrChargingOldSkillId(mob, skillId))
+                    return;
+
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
 
                 var haxeSkillId = skillId.AsHaxeString();
                 if (!mob.hasOldSkill(haxeSkillId))
@@ -2632,33 +2585,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
 
                 mob.queueAttack(oldSkill, requiresTargetInArea, data);
-                var queuedOrCharging = IsClientOldSkillQueuedOrCharging(mob, oldSkill);
-                if (!queuedOrCharging)
-                {
-                    try { oldSkill.prepare(data); } catch { }
-                    oldSkill.execute(null);
-                    queuedOrCharging = true;
-                }
             }
             catch
             {
-                try
-                {
-                    var haxeSkillId = skillId.AsHaxeString();
-                    if (!mob.hasOldSkill(haxeSkillId))
-                        return;
-
-                    var oldSkill = mob.getOldSkill(haxeSkillId) as OldMobSkill;
-                    if (oldSkill == null)
-                        return;
-
-                    TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
-                    try { oldSkill.prepare(data); } catch { }
-                    oldSkill.execute(null);
-                }
-                catch
-                {
-                }
+                // Queue packet represents early intent (prepare window).
+                // Avoid forcing immediate execute here to prevent duplicate visual-only attacks.
             }
         }
 
@@ -2672,9 +2603,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
+                var normalizedSkillId = rawSkillId.Trim();
+                if (string.IsNullOrWhiteSpace(normalizedSkillId))
+                    return;
 
-                var skillId = rawSkillId.AsHaxeString();
+                var skillId = normalizedSkillId.AsHaxeString();
                 if (!mob.hasOldSkill(skillId))
                     return;
 
@@ -2682,7 +2615,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (oldSkill == null)
                     return;
 
-                try { oldSkill.prepare(data); } catch { }
+                if (TryGetChargingOldSkillId(mob, out var chargingOldSkillId))
+                {
+                    if (!string.Equals(chargingOldSkillId, normalizedSkillId, StringComparison.Ordinal))
+                        return;
+
+                    oldSkill.execute(null);
+                    return;
+                }
+
+                var hadQueuedSkill = IsQueuedOldSkillId(mob, normalizedSkillId);
+                if (hadQueuedSkill)
+                    TryResetQueuedOldSkillIfMatches(mob, normalizedSkillId);
+                else
+                    TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+
+                if (!TryExecuteClientOldSkillNativeLike(oldSkill, data))
+                {
+                    try { oldSkill.prepare(data); } catch { }
+                }
+
                 oldSkill.execute(null);
             }
             catch
@@ -2697,9 +2649,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
+                var normalizedSkillId = rawSkillId.Trim();
+                if (string.IsNullOrWhiteSpace(normalizedSkillId))
+                    return;
 
-                var skillId = rawSkillId.AsHaxeString();
+                if (TryGetChargingNewSkillId(mob, out var chargingNewSkillId))
+                {
+                    if (!string.Equals(chargingNewSkillId, normalizedSkillId, StringComparison.Ordinal))
+                        return;
+
+                    var chargingSkill = mob.getChargingNewSkill() as MobSkill;
+                    if (chargingSkill == null)
+                        return;
+
+                    chargingSkill.execute(null);
+                    return;
+                }
+
+                TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
+
+                var skillId = normalizedSkillId.AsHaxeString();
                 var skill = mob.getSkill(skillId) as MobSkill;
                 if (skill == null)
                     return;
@@ -2712,13 +2681,52 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private static bool TryExecuteClientOldSkillNativeLike(OldMobSkill oldSkill, int? data)
+        {
+            if (oldSkill == null)
+                return false;
+
+            try
+            {
+                dynamic dyn = oldSkill;
+                dyn.prepareOnOwnerTarget(true, data);
+                return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var mi = oldSkill.GetType().GetMethod("prepareOnOwnerTarget");
+                if (mi == null)
+                    return false;
+
+                var parameters = mi.GetParameters();
+                object?[] args;
+                if (parameters.Length >= 2)
+                    args = new object?[] { true, data };
+                else if (parameters.Length == 1)
+                    args = new object?[] { true };
+                else
+                    args = Array.Empty<object?>();
+
+                mi.Invoke(oldSkill, args);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static void TryApplyClientContactAttack(Mob mob, int targetUserId, int attackDir)
         {
             var target = ResolveClientAttackTargetEntity(mob, targetUserId);
             if (target == null)
                 return;
 
-            TrySetClientMobAttackTarget(mob, targetUserId, attackDir);
+            TrySetClientMobAttackTarget(mob, targetUserId, attackDir, forceRetarget: true);
             TryWakeMobForForcedSimulation(mob);
 
             try
@@ -2740,46 +2748,107 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static bool IsClientOldSkillQueuedOrCharging(Mob mob, OldMobSkill? expectedSkill)
+        private static bool IsQueuedOrChargingOldSkillId(Mob mob, string expectedSkillId)
         {
+            if (mob == null || string.IsNullOrWhiteSpace(expectedSkillId))
+                return false;
+
+            if (IsQueuedOldSkillId(mob, expectedSkillId))
+                return true;
+
+            if (TryGetChargingOldSkillId(mob, out var chargingOldSkillId) &&
+                string.Equals(chargingOldSkillId, expectedSkillId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsQueuedOldSkillId(Mob mob, string expectedSkillId)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(expectedSkillId))
+                return false;
+
+            if (!TryGetQueuedOldSkillId(mob, out var queuedOldSkillId))
+                return false;
+
+            return string.Equals(queuedOldSkillId, expectedSkillId, StringComparison.Ordinal);
+        }
+
+        private static bool TryGetQueuedOldSkillId(Mob mob, out string skillId)
+        {
+            skillId = string.Empty;
             if (mob == null)
                 return false;
 
             try
             {
                 var queued = mob.queuedOldSkill;
-                if (queued != null && queued.a != null)
-                {
-                    if (expectedSkill == null)
-                        return true;
-
-                    if (ReferenceEquals(queued.a, expectedSkill))
-                        return true;
-
-                    var queuedId = queued.a.id?.ToString() ?? string.Empty;
-                    var expectedId = expectedSkill.id?.ToString() ?? string.Empty;
-                    if (!string.IsNullOrWhiteSpace(queuedId) &&
-                        !string.IsNullOrWhiteSpace(expectedId) &&
-                        string.Equals(queuedId, expectedId, StringComparison.Ordinal))
-                    {
-                        return true;
-                    }
-                }
+                var queuedSkill = queued?.a;
+                skillId = queuedSkill?.id?.ToString() ?? string.Empty;
+                return !string.IsNullOrWhiteSpace(skillId);
             }
             catch
             {
+                skillId = string.Empty;
+                return false;
             }
+        }
+
+        private static bool TryGetChargingOldSkillId(Mob mob, out string skillId)
+        {
+            skillId = string.Empty;
+            if (mob == null)
+                return false;
 
             try
             {
-                if (mob.hasSkillCharging())
-                    return true;
+                var chargingOldSkill = mob.getChargingOldSkill() as OldSkill;
+                skillId = chargingOldSkill?.id?.ToString() ?? string.Empty;
+                return !string.IsNullOrWhiteSpace(skillId);
+            }
+            catch
+            {
+                skillId = string.Empty;
+                return false;
+            }
+        }
+
+        private static bool TryGetChargingNewSkillId(Mob mob, out string skillId)
+        {
+            skillId = string.Empty;
+            if (mob == null)
+                return false;
+
+            try
+            {
+                var chargingNewSkill = mob.getChargingNewSkill();
+                skillId = chargingNewSkill?.id?.ToString() ?? string.Empty;
+                return !string.IsNullOrWhiteSpace(skillId);
+            }
+            catch
+            {
+                skillId = string.Empty;
+                return false;
+            }
+        }
+
+        private static void TryResetQueuedOldSkillIfMatches(Mob mob, string expectedSkillId)
+        {
+            if (mob == null || string.IsNullOrWhiteSpace(expectedSkillId))
+                return;
+
+            if (!IsQueuedOldSkillId(mob, expectedSkillId))
+                return;
+
+            try
+            {
+                mob.resetQueuedOldSkill();
             }
             catch
             {
             }
-
-            return false;
         }
 
         private static void RegisterClientQueuedOldSkillMarker(Mob mob, string skillId)
@@ -2829,43 +2898,46 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             return false;
         }
 
-        private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir)
+        private static void TrySetClientMobAttackTarget(Mob mob, int targetUserId, int attackDir, bool forceRetarget = false)
         {
             var target = ResolveClientAttackTargetEntity(mob, targetUserId);
             if (target == null)
                 return;
 
-            try
+            var normalizedAttackDir = NormalizeDir(attackDir);
+            if (!forceRetarget)
             {
-                var normalizedAttackDir = NormalizeDir(attackDir);
-                if (targetUserId <= 0)
+                try
                 {
-                    if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
+                    if (targetUserId <= 0)
                     {
-                        if (normalizedAttackDir != 0)
-                            mob.dir = normalizedAttackDir;
-                        return;
-                    }
+                        if (mob.aTarget != null && IsPlayerCombatTargetEntity(mob.aTarget))
+                        {
+                            if (normalizedAttackDir != 0)
+                                mob.dir = normalizedAttackDir;
+                            return;
+                        }
 
-                    if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
+                        if (mob.nemesisTarget != null && IsPlayerCombatTargetEntity(mob.nemesisTarget))
+                        {
+                            if (normalizedAttackDir != 0)
+                                mob.dir = normalizedAttackDir;
+                            return;
+                        }
+                    }
+                    else
                     {
-                        if (normalizedAttackDir != 0)
-                            mob.dir = normalizedAttackDir;
-                        return;
+                        if (ReferenceEquals(mob.aTarget, target) || ReferenceEquals(mob.nemesisTarget, target))
+                        {
+                            if (normalizedAttackDir != 0)
+                                mob.dir = normalizedAttackDir;
+                            return;
+                        }
                     }
                 }
-                else
+                catch
                 {
-                    if (ReferenceEquals(mob.aTarget, target) || ReferenceEquals(mob.nemesisTarget, target))
-                    {
-                        if (normalizedAttackDir != 0)
-                            mob.dir = normalizedAttackDir;
-                        return;
-                    }
                 }
-            }
-            catch
-            {
             }
 
             TrySetMobAttackTargetsExact(mob, target, attackDir, forceAttackDir: true);
@@ -3133,13 +3205,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     self.dir = responsiveDir;
             }
 
-            if (attackUnlock && ShouldPreserveLocalAttackAnimation(self, target.AnimPayload))
+            if (attackUnlock && HasLocalQueuedOrChargingSkill(self))
                 return;
 
             ApplyAnimPayload(self, target.AnimPayload);
         }
 
-        private static bool ShouldPreserveLocalAttackAnimation(Mob mob, string incomingPayload)
+        private static bool HasLocalQueuedOrChargingSkill(Mob mob)
         {
             if (mob == null)
                 return false;
@@ -3153,48 +3225,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
             }
 
-            try
-            {
-                if (mob.hasSkillCharging())
-                    return true;
-            }
-            catch
-            {
-            }
-
-            if (!TryParseAnimPayload(incomingPayload, out var incoming))
-                return false;
-
-            try
-            {
-                var animManager = GetMobAnimManager(mob);
-                var top = GetTopAnimInstance(animManager);
-                var currentGroup = top?.group?.ToString() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(currentGroup))
-                    return false;
-
-                if (string.Equals(currentGroup, incoming.Group, StringComparison.Ordinal))
-                    return false;
-
-                var lower = currentGroup.ToLowerInvariant();
-                if (lower.Contains("attack") ||
-                    lower.Contains("skill") ||
-                    lower.Contains("shoot") ||
-                    lower.Contains("cast") ||
-                    lower.Contains("slash") ||
-                    lower.Contains("stab") ||
-                    lower.Contains("bite") ||
-                    lower.Contains("spit") ||
-                    lower.Contains("hit"))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
+            return TryGetChargingOldSkillId(mob, out _) || TryGetChargingNewSkillId(mob, out _);
         }
 
         private static void ConsumeIncomingMobHits(NetNode net)
