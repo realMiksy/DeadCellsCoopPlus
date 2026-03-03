@@ -40,8 +40,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, int> clientLastReportedMobLife = new();
         private static readonly Dictionary<int, long> clientLastMobHitReportTick = new();
         private static readonly Dictionary<int, string> clientLastSentAffectPayloadBySyncId = new();
+        private static readonly Dictionary<int, TimedStringPayload> clientAffectSampleBySyncId = new();
+        private static readonly Dictionary<int, long> clientLastSentAffectTickBySyncId = new();
+        private static readonly Dictionary<int, ClientDrawSentState> clientLastSentDrawStateBySyncId = new();
+        private static readonly Dictionary<int, TimedStringPayload> clientLastAppliedHostAffectPayloadBySyncId = new();
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly Dictionary<int, HostMobSentState> hostLastSentMobStatesBySyncId = new();
+        private static readonly Dictionary<int, CachedHostMobPayload> hostCachedPayloadBySyncId = new();
         private static readonly Dictionary<int, long> hostAttackRetargetLockUntilTick = new();
         private static readonly List<Entity> hostDetectedTargets = new();
         private static int suppressMobDieSendDepth;
@@ -62,6 +67,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientMobDrawSendRateHz = 30.0;
         private const double ClientStateSendRateHz = 30.0;
         private const double HostStateSendRateHz = 30.0;
+        private const double ClientMobDrawMinRateHz = 8.0;
+        private const double ClientStateMinRateHz = 8.0;
+        private const double HostStateMinRateHz = 12.0;
+        private const int AdaptiveRateStartMobCount = 24;
+        private const int AdaptiveRateEndMobCount = 120;
+        private const double HostPayloadRefreshBaseSeconds = 0.18;
+        private const double HostPayloadRefreshMaxSeconds = 0.45;
+        private const double ClientAffectSampleBaseSeconds = 0.10;
+        private const double ClientAffectSampleMaxSeconds = 0.28;
+        private const double ClientAffectResendBaseSeconds = ClientAffectSyncSeconds;
+        private const double ClientAffectResendMaxSeconds = ClientAffectSyncSeconds;
+        private const double ClientDrawKeepAliveSeconds = 0.9;
         private const double ClientInterpolationAlpha = 0.7;
         private const double ClientAiLockSeconds = 0.3;
         private const double ClientAttackUnlockSeconds = 2.2;
@@ -71,6 +88,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
         private const double ClientTurnSnapDeltaPx = 2.0;
+        private const double MobStatePositionEpsilon = 0.35;
         private const double PixelsPerCase = 24.0;
         private const double MaxCoordinateMatchDistance = 96.0;
         private const double MaxCoordinateMatchDistanceSq = MaxCoordinateMatchDistance * MaxCoordinateMatchDistance;
@@ -142,6 +160,48 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 AnimPayload = animPayload ?? string.Empty;
                 Type = type ?? string.Empty;
                 StatePayload = statePayload ?? string.Empty;
+            }
+        }
+
+        private readonly struct CachedHostMobPayload
+        {
+            public readonly string AnimPayload;
+            public readonly string Type;
+            public readonly string StatePayload;
+            public readonly long Tick;
+
+            public CachedHostMobPayload(string animPayload, string type, string statePayload, long tick)
+            {
+                AnimPayload = animPayload ?? string.Empty;
+                Type = type ?? string.Empty;
+                StatePayload = statePayload ?? string.Empty;
+                Tick = tick;
+            }
+        }
+
+        private readonly struct TimedStringPayload
+        {
+            public readonly string Payload;
+            public readonly long Tick;
+
+            public TimedStringPayload(string payload, long tick)
+            {
+                Payload = payload ?? string.Empty;
+                Tick = tick;
+            }
+        }
+
+        private readonly struct ClientDrawSentState
+        {
+            public readonly bool IsOutOfGame;
+            public readonly bool IsOnScreen;
+            public readonly long Tick;
+
+            public ClientDrawSentState(bool isOutOfGame, bool isOnScreen, long tick)
+            {
+                IsOutOfGame = isOutOfGame;
+                IsOnScreen = isOnScreen;
+                Tick = tick;
             }
         }
 
@@ -548,8 +608,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsHost(net))
                 return;
 
+            var trackedMobCount = 0;
+            lock (Sync)
+            {
+                trackedMobCount = trackedMobs.Count;
+            }
+
+            if (trackedMobCount <= 0)
+                return;
+
             var now = Stopwatch.GetTimestamp();
-            var minDelta = (long)(Stopwatch.Frequency / HostStateSendRateHz);
+            var hostRateHz = ComputeAdaptiveRateHz(HostStateSendRateHz, HostStateMinRateHz, trackedMobCount);
+            var minDelta = (long)(Stopwatch.Frequency / hostRateHz);
             if (lastHostStateSendTick != 0 && now - lastHostStateSendTick < minDelta)
                 return;
             lastHostStateSendTick = now;
@@ -576,7 +646,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var deltas = new List<NetNode.MobStateSnapshot>(mobs.Count);
             for (int i = 0; i < mobs.Count; i++)
             {
-                if (TryBuildHostMobStateDeltaSnapshot(mobs[i], out var snapshot))
+                if (TryBuildHostMobStateDeltaSnapshot(mobs[i], now, trackedMobCount, out var snapshot))
                     deltas.Add(snapshot);
             }
 
@@ -589,8 +659,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsClient(net))
                 return;
 
+            var trackedMobCount = 0;
+            lock (Sync)
+            {
+                trackedMobCount = trackedMobs.Count;
+            }
+
+            if (trackedMobCount <= 0)
+                return;
+
             var now = Stopwatch.GetTimestamp();
-            var minDelta = (long)(Stopwatch.Frequency / ClientStateSendRateHz);
+            var clientRateHz = ComputeAdaptiveRateHz(ClientStateSendRateHz, ClientStateMinRateHz, trackedMobCount);
+            var minDelta = (long)(Stopwatch.Frequency / clientRateHz);
             if (lastClientStateSendTick != 0 && now - lastClientStateSendTick < minDelta)
                 return;
             lastClientStateSendTick = now;
@@ -614,6 +694,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mobs.Count == 0)
                 return;
 
+            var affectResendTicks = (long)(Stopwatch.Frequency * ComputeAdaptiveAffectResendSeconds(mobs.Count));
             var deltas = new List<NetNode.MobStateSnapshot>(mobs.Count);
             for (int i = 0; i < mobs.Count; i++)
             {
@@ -623,7 +704,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (!TryGetMobSyncId(mob, out var mobSyncId) || mobSyncId < 0)
                     continue;
 
-                var statePayload = BuildMobAffectStatePayload(mob);
+                var statePayload = GetClientAffectPayloadForSend(mob, mobSyncId, now, mobs.Count);
                 var shouldSend = false;
                 var hasAnyState = !string.IsNullOrWhiteSpace(statePayload);
 
@@ -631,9 +712,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     var changed = !clientLastSentAffectPayloadBySyncId.TryGetValue(mobSyncId, out var lastPayload) ||
                                   !string.Equals(lastPayload, statePayload, StringComparison.Ordinal);
-                    if (changed || hasAnyState)
+                    clientLastSentAffectTickBySyncId.TryGetValue(mobSyncId, out var lastSendTick);
+                    var periodicRefresh = hasAnyState && (lastSendTick == 0 || now - lastSendTick >= affectResendTicks);
+                    if (changed || periodicRefresh)
                     {
                         clientLastSentAffectPayloadBySyncId[mobSyncId] = statePayload;
+                        clientLastSentAffectTickBySyncId[mobSyncId] = now;
                         shouldSend = true;
                     }
                 }
@@ -641,23 +725,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (!shouldSend)
                     continue;
 
-                var x = GetWorldX(mob);
-                var y = GetWorldY(mob);
-                var dir = NormalizeDir(mob.dir);
-                var life = mob.life;
-                var maxLife = mob.maxLife;
-                var animPayload = BuildAnimPayload(mob);
-                var mobType = BuildMobStateTypeSignature(mob);
-
                 deltas.Add(new NetNode.MobStateSnapshot(
                     mobSyncId,
-                    x,
-                    y,
-                    dir,
-                    life,
-                    maxLife,
-                    animPayload,
-                    mobType,
+                    0.0,
+                    0.0,
+                    0,
+                    0,
+                    0,
+                    string.Empty,
+                    string.Empty,
                     statePayload));
             }
 
@@ -665,7 +741,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 net.SendMobStates(deltas);
         }
 
-        private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, out NetNode.MobStateSnapshot snapshot)
+        private static bool TryBuildHostMobStateDeltaSnapshot(Mob mob, long nowTick, int trackedMobCount, out NetNode.MobStateSnapshot snapshot)
         {
             snapshot = default;
             if (mob == null)
@@ -679,16 +755,43 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var dir = NormalizeDir(mob.dir);
             var life = mob.life;
             var maxLife = mob.maxLife;
-            var mobType = BuildMobStateTypeSignature(mob);
-            var statePayload = BuildMobAffectStatePayload(mob);
-            var animPayload = BuildAnimPayload(mob);
+            var animPayload = string.Empty;
+            var mobType = string.Empty;
+            var statePayload = string.Empty;
 
             HostMobSentState previous;
             var hadPrevious = false;
+            CachedHostMobPayload cachedPayload = default;
+            var hasCachedPayload = false;
 
             lock (Sync)
             {
                 hadPrevious = hostLastSentMobStatesBySyncId.TryGetValue(mobSyncId, out previous);
+                hasCachedPayload = hostCachedPayloadBySyncId.TryGetValue(mobSyncId, out cachedPayload);
+            }
+
+            var payloadRefreshTicks = (long)(Stopwatch.Frequency * ComputeAdaptiveHostPayloadRefreshSeconds(trackedMobCount));
+            var shouldRefreshPayload = !hasCachedPayload ||
+                                       !hadPrevious ||
+                                       nowTick - cachedPayload.Tick >= payloadRefreshTicks;
+
+            if (shouldRefreshPayload)
+            {
+                animPayload = BuildAnimPayload(mob);
+                mobType = BuildMobStateTypeSignature(mob);
+                statePayload = BuildMobAffectStatePayload(mob);
+                cachedPayload = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
+                hasCachedPayload = true;
+                lock (Sync)
+                {
+                    hostCachedPayloadBySyncId[mobSyncId] = cachedPayload;
+                }
+            }
+            else
+            {
+                animPayload = cachedPayload.AnimPayload;
+                mobType = cachedPayload.Type;
+                statePayload = cachedPayload.StatePayload;
             }
 
             var current = new HostMobSentState(x, y, dir, life, maxLife, animPayload, mobType, statePayload);
@@ -698,6 +801,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lock (Sync)
             {
                 hostLastSentMobStatesBySyncId[mobSyncId] = current;
+                if (!hasCachedPayload)
+                    hostCachedPayloadBySyncId[mobSyncId] = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
             }
 
             snapshot = new NetNode.MobStateSnapshot(mobSyncId, x, y, dir, life, maxLife, animPayload, mobType, statePayload);
@@ -706,14 +811,90 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static bool HostMobSentStateEquals(HostMobSentState a, HostMobSentState b)
         {
-            return a.X == b.X &&
-                   a.Y == b.Y &&
+            return IsApproximatelyEqual(a.X, b.X, MobStatePositionEpsilon) &&
+                   IsApproximatelyEqual(a.Y, b.Y, MobStatePositionEpsilon) &&
                    a.Dir == b.Dir &&
                    a.Life == b.Life &&
                    a.MaxLife == b.MaxLife &&
                    string.Equals(a.AnimPayload, b.AnimPayload, StringComparison.Ordinal) &&
                    string.Equals(a.Type, b.Type, StringComparison.Ordinal) &&
                    string.Equals(a.StatePayload, b.StatePayload, StringComparison.Ordinal);
+        }
+
+        private static double ComputeAdaptiveRateHz(double baseRateHz, double minRateHz, int trackedMobCount)
+        {
+            if (trackedMobCount <= AdaptiveRateStartMobCount)
+                return baseRateHz;
+
+            if (trackedMobCount >= AdaptiveRateEndMobCount)
+                return minRateHz;
+
+            var range = AdaptiveRateEndMobCount - AdaptiveRateStartMobCount;
+            if (range <= 0)
+                return minRateHz;
+
+            var clamped = System.Math.Max(0, trackedMobCount - AdaptiveRateStartMobCount);
+            var t = clamped / (double)range;
+            var adaptive = baseRateHz - ((baseRateHz - minRateHz) * t);
+            return System.Math.Max(minRateHz, adaptive);
+        }
+
+        private static double ComputeAdaptiveHostPayloadRefreshSeconds(int trackedMobCount)
+        {
+            return ComputeAdaptiveSeconds(HostPayloadRefreshBaseSeconds, HostPayloadRefreshMaxSeconds, trackedMobCount);
+        }
+
+        private static double ComputeAdaptiveClientAffectSampleSeconds(int trackedMobCount)
+        {
+            return ComputeAdaptiveSeconds(ClientAffectSampleBaseSeconds, ClientAffectSampleMaxSeconds, trackedMobCount);
+        }
+
+        private static double ComputeAdaptiveAffectResendSeconds(int trackedMobCount)
+        {
+            return ComputeAdaptiveSeconds(ClientAffectResendBaseSeconds, ClientAffectResendMaxSeconds, trackedMobCount);
+        }
+
+        private static double ComputeAdaptiveSeconds(double baseSeconds, double maxSeconds, int trackedMobCount)
+        {
+            if (trackedMobCount <= AdaptiveRateStartMobCount)
+                return baseSeconds;
+
+            if (trackedMobCount >= AdaptiveRateEndMobCount)
+                return maxSeconds;
+
+            var range = AdaptiveRateEndMobCount - AdaptiveRateStartMobCount;
+            if (range <= 0)
+                return maxSeconds;
+
+            var clamped = System.Math.Max(0, trackedMobCount - AdaptiveRateStartMobCount);
+            var t = clamped / (double)range;
+            return baseSeconds + ((maxSeconds - baseSeconds) * t);
+        }
+
+        private static string GetClientAffectPayloadForSend(Mob mob, int mobSyncId, long nowTick, int trackedMobCount)
+        {
+            var sampleTicks = (long)(Stopwatch.Frequency * ComputeAdaptiveClientAffectSampleSeconds(trackedMobCount));
+            lock (Sync)
+            {
+                if (clientAffectSampleBySyncId.TryGetValue(mobSyncId, out var cached) &&
+                    nowTick - cached.Tick < sampleTicks)
+                {
+                    return cached.Payload;
+                }
+            }
+
+            var payload = BuildMobAffectStatePayload(mob);
+            lock (Sync)
+            {
+                clientAffectSampleBySyncId[mobSyncId] = new TimedStringPayload(payload, nowTick);
+            }
+
+            return payload;
+        }
+
+        private static bool IsApproximatelyEqual(double a, double b, double epsilon)
+        {
+            return System.Math.Abs(a - b) <= epsilon;
         }
 
         private static string BuildMobAffectStatePayload(Mob mob)
@@ -1010,8 +1191,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             clientLastReportedMobLife.Clear();
             clientLastMobHitReportTick.Clear();
             clientLastSentAffectPayloadBySyncId.Clear();
+            clientAffectSampleBySyncId.Clear();
+            clientLastSentAffectTickBySyncId.Clear();
+            clientLastSentDrawStateBySyncId.Clear();
+            clientLastAppliedHostAffectPayloadBySyncId.Clear();
             hostMobTypeBySyncId.Clear();
             hostLastSentMobStatesBySyncId.Clear();
+            hostCachedPayloadBySyncId.Clear();
             hostQueuedOldSkillMarkers.Clear();
             hostDetectedTargets.Clear();
             currentLevel = null;
@@ -1031,8 +1217,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (SyncMobIdRegistry.TryGetExistingSyncId(mob, out var syncId))
             {
                 clientLastSentAffectPayloadBySyncId.Remove(syncId);
+                clientAffectSampleBySyncId.Remove(syncId);
+                clientLastSentAffectTickBySyncId.Remove(syncId);
+                clientLastSentDrawStateBySyncId.Remove(syncId);
+                clientLastAppliedHostAffectPayloadBySyncId.Remove(syncId);
                 hostMobTypeBySyncId.Remove(syncId);
                 hostLastSentMobStatesBySyncId.Remove(syncId);
+                hostCachedPayloadBySyncId.Remove(syncId);
             }
 
             SyncMobIdRegistry.RemoveMob(mob);
@@ -1052,8 +1243,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (SyncMobIdRegistry.TryGetExistingSyncId(mob, out var syncId))
             {
                 clientLastSentAffectPayloadBySyncId.Remove(syncId);
+                clientAffectSampleBySyncId.Remove(syncId);
+                clientLastSentAffectTickBySyncId.Remove(syncId);
+                clientLastSentDrawStateBySyncId.Remove(syncId);
+                clientLastAppliedHostAffectPayloadBySyncId.Remove(syncId);
                 hostMobTypeBySyncId.Remove(syncId);
                 hostLastSentMobStatesBySyncId.Remove(syncId);
+                hostCachedPayloadBySyncId.Remove(syncId);
             }
 
             SyncMobIdRegistry.RemoveMob(mob);
@@ -2386,7 +2582,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (states == null || states.Count == 0)
                 return;
 
-            List<(Mob mob, int life, int maxLife, string statePayload)> stateApplies = new(states.Count);
+            List<(int syncId, Mob mob, int life, int maxLife, string statePayload)> stateApplies = new(states.Count);
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
@@ -2413,7 +2609,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             try { mob.dir = incomingDir; } catch { }
                         }
 
-                        stateApplies.Add((mob, state.Life, state.MaxLife, state.StatePayload ?? string.Empty));
+                        stateApplies.Add((state.Index, mob, state.Life, state.MaxLife, state.StatePayload ?? string.Empty));
                     }
 
                     var animPayload = state.AnimPayload;
@@ -2424,7 +2620,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         state.Life,
                         state.MaxLife,
                         animPayload,
-                        state.StatePayload);
+                        state.StatePayload ?? string.Empty);
                 }
             }
 
@@ -2432,16 +2628,31 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 var entry = stateApplies[i];
                 ApplyAuthoritativeLifeState(entry.mob, entry.life, entry.maxLife);
-                ApplyAuthoritativeAffectState(entry.mob, entry.statePayload);
+                ApplyAuthoritativeAffectState(entry.syncId, entry.mob, entry.statePayload);
             }
         }
 
-        private static void ApplyAuthoritativeAffectState(Mob mob, string? payload)
+        private static void ApplyAuthoritativeAffectState(int mobSyncId, Mob mob, string? payload)
         {
             if (mob == null || mob.destroyed)
                 return;
 
-            var desired = ParseAffectStatePayload(payload);
+            var safePayload = payload ?? string.Empty;
+            var nowTick = Stopwatch.GetTimestamp();
+            var minDelta = (long)(Stopwatch.Frequency * ClientAffectSyncSeconds);
+            lock (Sync)
+            {
+                if (clientLastAppliedHostAffectPayloadBySyncId.TryGetValue(mobSyncId, out var lastApplied) &&
+                    string.Equals(lastApplied.Payload, safePayload, StringComparison.Ordinal) &&
+                    nowTick - lastApplied.Tick < minDelta)
+                {
+                    return;
+                }
+
+                clientLastAppliedHostAffectPayloadBySyncId[mobSyncId] = new TimedStringPayload(safePayload, nowTick);
+            }
+
+            var desired = ParseAffectStatePayload(safePayload);
             if (!TryGetCurrentAffectIds(mob, out var current))
                 return;
 
@@ -2594,11 +2805,22 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void TrySendClientMobDraws(NetNode net)
         {
+            var trackedMobCount = 0;
+            lock (Sync)
+            {
+                trackedMobCount = trackedMobs.Count;
+            }
+
+            if (trackedMobCount <= 0)
+                return;
+
             var now = Stopwatch.GetTimestamp();
-            var minDelta = (long)(Stopwatch.Frequency / ClientMobDrawSendRateHz);
+            var drawRateHz = ComputeAdaptiveRateHz(ClientMobDrawSendRateHz, ClientMobDrawMinRateHz, trackedMobCount);
+            var minDelta = (long)(Stopwatch.Frequency / drawRateHz);
             if (lastClientMobDrawSendTick != 0 && now - lastClientMobDrawSendTick < minDelta)
                 return;
             lastClientMobDrawSendTick = now;
+            var keepAliveTicks = (long)(Stopwatch.Frequency * ClientDrawKeepAliveSeconds);
 
             List<NetNode.MobDraw> draws = new();
             lock (Sync)
@@ -2636,6 +2858,19 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         if (distSq > MaxCoordinateMatchDistanceSq * 400.0)
                             continue;
                     }
+
+                    var shouldSend = false;
+                    if (!clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastDraw) ||
+                        lastDraw.IsOutOfGame != isOutOfGame ||
+                        lastDraw.IsOnScreen != isOnScreen ||
+                        now - lastDraw.Tick >= keepAliveTicks)
+                    {
+                        clientLastSentDrawStateBySyncId[mobSyncId] = new ClientDrawSentState(isOutOfGame, isOnScreen, now);
+                        shouldSend = true;
+                    }
+
+                    if (!shouldSend)
+                        continue;
 
                     draws.Add(new NetNode.MobDraw(net.id, mobSyncId, isOutOfGame, isOnScreen));
                 }
