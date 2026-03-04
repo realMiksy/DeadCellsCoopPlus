@@ -116,6 +116,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostContactRetargetLockSeconds = 0.25;
         private const double HostOldSkillRetargetLockSeconds = 0.75;
         private const double ClientAffectSyncSeconds = 0.35;
+        private const double AffectFramesPerSecond = 60.0;
+        private const int ClientAffectSyncDefaultFrames = 21;
+        private const int AffectTimeIncreaseThresholdFrames = 12;
 
         private readonly struct QueuedOldSkillMarker
         {
@@ -920,13 +923,59 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (affects == null || affects.length <= 0)
                     return string.Empty;
 
-                var ids = new List<int>(affects.length);
+                var parts = new List<string>(affects.length);
                 for (int i = 0; i < affects.length; i++)
                 {
                     var affectList = affects.getDyn(i);
-                    if (TryGetDynLength(affectList) <= 0)
+                    var affectCount = TryGetDynLength(affectList);
+                    if (affectCount <= 0)
                         continue;
 
+                    var maxFrames = 0;
+                    for (int j = 0; j < affectCount; j++)
+                    {
+                        var affect = TryGetDynAffectEntry(affectList, j);
+                        if (affect == null)
+                            continue;
+
+                        var frames = NormalizeAffectFrames(affect.t);
+                        if (frames > maxFrames)
+                            maxFrames = frames;
+                    }
+
+                    if (maxFrames <= 0)
+                        maxFrames = ClientAffectSyncDefaultFrames;
+
+                    parts.Add(i.ToString(CultureInfo.InvariantCulture) + ":" + maxFrames.ToString(CultureInfo.InvariantCulture));
+                }
+
+                if (parts.Count == 0)
+                    return string.Empty;
+
+                return string.Join(".", parts);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string BuildMobAffectPresencePayload(Mob mob)
+        {
+            if (mob == null)
+                return string.Empty;
+
+            try
+            {
+                var affects = mob.getAllAffects();
+                if (affects == null || affects.length <= 0)
+                    return string.Empty;
+
+                var ids = new List<int>(affects.length);
+                for (int i = 0; i < affects.length; i++)
+                {
+                    if (TryGetDynLength(affects.getDyn(i)) <= 0)
+                        continue;
                     ids.Add(i);
                 }
 
@@ -934,23 +983,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return string.Empty;
 
                 ids.Sort();
-                var raw = string.Join(".", ids);
-                if (string.IsNullOrWhiteSpace(raw))
-                    return string.Empty;
-
-                try
-                {
-                    return Uri.EscapeDataString(raw);
-                }
-                catch
-                {
-                    return raw;
-                }
+                return string.Join(".", ids);
             }
             catch
             {
                 return string.Empty;
             }
+        }
+
+        private static string ExtractAffectPresenceSignature(string? payload)
+        {
+            var parsed = ParseAffectStatePayload(payload);
+            if (parsed.Count == 0)
+                return string.Empty;
+
+            var ids = new List<int>(parsed.Count);
+            foreach (var key in parsed.Keys)
+                ids.Add(key);
+            ids.Sort();
+            return string.Join(".", ids);
         }
 
         private void Hook_Mob_contactAttack(Hook_Mob.orig_contactAttack orig, Mob self, Entity pow)
@@ -1605,6 +1656,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var bestIndex = -1;
             var bestScore = double.MaxValue;
+            var preferredStateSignature = ExtractAffectPresenceSignature(preferredStatePayload);
 
             for (int i = 0; i < trackedMobs.Count; i++)
             {
@@ -1643,12 +1695,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(preferredStatePayload))
+                if (!string.IsNullOrWhiteSpace(preferredStateSignature))
                 {
                     try
                     {
-                        var statePayload = BuildMobAffectStatePayload(mob);
-                        if (string.Equals(statePayload, preferredStatePayload, StringComparison.Ordinal))
+                        var stateSignature = BuildMobAffectPresencePayload(mob);
+                        if (string.Equals(stateSignature, preferredStateSignature, StringComparison.Ordinal))
                             score -= 16.0;
                     }
                     catch
@@ -2694,19 +2746,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (desired.Count == 0)
                 return;
 
-            foreach (var affectId in desired)
-            {
-                try
-                {
-                    if (mob.hasAffect(affectId))
-                        mob.minTimeAffect(affectId, ClientAffectSyncSeconds);
-                    else
-                        mob.setAffectS(affectId, ClientAffectSyncSeconds, HaxeProxy.Runtime.Ref<double>.Null, null);
-                }
-                catch
-                {
-                }
-            }
+            foreach (var entry in desired)
+                ApplySyncedAffectState(mob, entry.Key, entry.Value);
         }
 
         private static void ApplyIncomingHostMobStates(IReadOnlyList<NetNode.MobStateSnapshot> states)
@@ -2785,90 +2826,135 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             var desired = ParseAffectStatePayload(safePayload);
-            if (!TryGetCurrentAffectIds(mob, out var current))
+            if (desired.Count == 0)
                 return;
 
-            if (current.SetEquals(desired))
-            {
-                if (desired.Count == 0)
-                    return;
-
-                foreach (var affectId in desired)
-                {
-                    try { mob.minTimeAffect(affectId, ClientAffectSyncSeconds); } catch { }
-                }
-                return;
-            }
-
-            foreach (var currentId in current)
-            {
-                if (desired.Contains(currentId))
-                    continue;
-
-                try { mob.removeAllAffects(currentId); } catch { }
-            }
-
-            foreach (var affectId in desired)
-            {
-                if (current.Contains(affectId))
-                {
-                    try { mob.minTimeAffect(affectId, ClientAffectSyncSeconds); } catch { }
-                    continue;
-                }
-
-                try { mob.setAffectS(affectId, ClientAffectSyncSeconds, HaxeProxy.Runtime.Ref<double>.Null, null); } catch { }
-            }
+            foreach (var entry in desired)
+                ApplySyncedAffectState(mob, entry.Key, entry.Value);
         }
 
-        private static bool TryGetCurrentAffectIds(Mob mob, out HashSet<int> ids)
+        private static void ApplySyncedAffectState(Mob mob, int affectId, int targetFrames)
         {
-            ids = new HashSet<int>();
-            if (mob == null)
-                return false;
+            if (mob == null || mob.destroyed || affectId < 0)
+                return;
+
+            var normalizedFrames = targetFrames > 0 ? targetFrames : ClientAffectSyncDefaultFrames;
+            var targetSeconds = normalizedFrames / AffectFramesPerSecond;
+            var hadAffect = false;
+
+            try
+            {
+                hadAffect = mob.hasAffect(affectId);
+            }
+            catch
+            {
+            }
+
+            if (!hadAffect)
+            {
+                try
+                {
+                    mob.setAffectS(affectId, targetSeconds, HaxeProxy.Runtime.Ref<double>.Null, null);
+                }
+                catch
+                {
+                }
+            }
+
+            SyncExistingAffectTimeFrames(mob, affectId, normalizedFrames, allowIncrease: !hadAffect);
+        }
+
+        private static void SyncExistingAffectTimeFrames(Mob mob, int affectId, int targetFrames, bool allowIncrease)
+        {
+            if (mob == null || affectId < 0 || targetFrames <= 0)
+                return;
 
             try
             {
                 var affects = mob.getAllAffects();
-                if (affects == null || affects.length <= 0)
-                    return true;
+                if (affects == null || affectId >= affects.length)
+                    return;
 
-                for (int i = 0; i < affects.length; i++)
+                var affectList = affects.getDyn(affectId);
+                var affectCount = TryGetDynLength(affectList);
+                if (affectCount <= 0)
+                    return;
+
+                for (int i = 0; i < affectCount; i++)
                 {
-                    var affectList = affects.getDyn(i);
-                    if (TryGetDynLength(affectList) <= 0)
+                    var affect = TryGetDynAffectEntry(affectList, i);
+                    if (affect == null)
                         continue;
-                    ids.Add(i);
+
+                    var currentFrames = NormalizeAffectFrames(affect.t);
+                    if (currentFrames <= 0)
+                    {
+                        affect.t = targetFrames;
+                        continue;
+                    }
+
+                    if (currentFrames > targetFrames)
+                    {
+                        affect.t = targetFrames;
+                        continue;
+                    }
+
+                    if (allowIncrease || targetFrames - currentFrames >= AffectTimeIncreaseThresholdFrames)
+                        affect.t = targetFrames;
                 }
-                return true;
             }
             catch
             {
-                return false;
             }
         }
 
-        private static HashSet<int> ParseAffectStatePayload(string? payload)
+        private static Dictionary<int, int> ParseAffectStatePayload(string? payload)
         {
-            var ids = new HashSet<int>();
+            var affects = new Dictionary<int, int>();
             if (string.IsNullOrWhiteSpace(payload))
-                return ids;
+                return affects;
 
             var decoded = payload!;
             try { decoded = Uri.UnescapeDataString(decoded); } catch { }
             if (string.IsNullOrWhiteSpace(decoded))
-                return ids;
+                return affects;
 
             var parts = decoded.Split('.', StringSplitOptions.RemoveEmptyEntries);
             for (int i = 0; i < parts.Length; i++)
             {
-                if (!int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                var token = parts[i]?.Trim();
+                if (string.IsNullOrWhiteSpace(token))
+                    continue;
+
+                var idPart = token;
+                var frames = ClientAffectSyncDefaultFrames;
+
+                var separator = token.IndexOf(':');
+                if (separator > 0 && separator < token.Length - 1)
+                {
+                    idPart = token[..separator];
+                    var framesPart = token[(separator + 1)..];
+                    if (int.TryParse(framesPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedFrames) && parsedFrames > 0)
+                        frames = parsedFrames;
+                }
+
+                if (!int.TryParse(idPart, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
                     continue;
                 if (id < 0)
                     continue;
-                ids.Add(id);
+
+                if (affects.TryGetValue(id, out var existing))
+                {
+                    if (frames > existing)
+                        affects[id] = frames;
+                }
+                else
+                {
+                    affects[id] = frames;
+                }
             }
 
-            return ids;
+            return affects;
         }
 
         private static int TryGetDynLength(object? dynArray)
@@ -2884,6 +2970,30 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 return 0;
             }
+        }
+
+        private static virtual_a_t_uniqId_val_? TryGetDynAffectEntry(object? dynArray, int index)
+        {
+            if (dynArray == null || index < 0)
+                return null;
+
+            try
+            {
+                return ((dynamic)dynArray).getDyn(index) as virtual_a_t_uniqId_val_;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static int NormalizeAffectFrames(double frames)
+        {
+            if (!double.IsFinite(frames) || frames <= 0.0)
+                return 0;
+
+            var normalized = (int)System.Math.Ceiling(frames);
+            return normalized <= 0 ? 0 : normalized;
         }
 
         private static void ConsumeIncomingHostMobAttacks(NetNode net)
