@@ -51,6 +51,7 @@ namespace DeadCellsMultiplayerMod
         private static bool _steamLobbyActive;
         private static ulong _steamLobbyId;
         private static string _steamLobbyCode = string.Empty;
+        private static ulong _steamHostSteamId;
         private static bool _waitingForHost;
         internal const int ClientConnectMaxAttempts = 3;
         private static int _clientConnectAttempt;
@@ -178,6 +179,7 @@ namespace DeadCellsMultiplayerMod
                 _steamLobbyActive = false;
                 _steamLobbyId = 0;
                 _steamLobbyCode = string.Empty;
+                _steamHostSteamId = 0UL;
             }
 
             InitializeMenuUiHooks();
@@ -943,6 +945,7 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyActive = false;
             _steamLobbyId = 0;
             _steamLobbyCode = string.Empty;
+            _steamHostSteamId = 0UL;
             ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
@@ -996,6 +999,7 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyActive = false;
             _steamLobbyId = 0;
             _steamLobbyCode = string.Empty;
+            _steamHostSteamId = 0UL;
             ConnectionUI.NotifyConnectionsChanged();
             ApplySteamPersonaUsername();
 
@@ -1014,9 +1018,9 @@ namespace DeadCellsMultiplayerMod
                 ApplySteamPersonaUsername(join.PersonaName);
 
             var endpoint = join.Endpoint;
-            if (endpoint == null)
+            if (join.HostSteamId == 0UL && endpoint == null)
             {
-                _log?.Warning("[NetMod][Steam] Join failed: lobby endpoint is missing");
+                _log?.Warning("[NetMod][Steam] Join failed: lobby endpoint and host Steam id are missing");
                 ShowConnectionErrorPopup(
                     screen,
                     GetText.Instance.GetString("Steam join failed"),
@@ -1025,13 +1029,17 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            _mpIp = endpoint.Address.ToString();
-            _mpPort = endpoint.Port;
+            if (endpoint != null)
+            {
+                _mpIp = endpoint.Address.ToString();
+                _mpPort = endpoint.Port;
+                SaveConfig();
+            }
             _steamLobbyId = join.LobbyId;
             _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
+            _steamHostSteamId = join.HostSteamId;
             ConnectionUI.NotifyConnectionsChanged();
-            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
-            SaveConfig();
+            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
 
             StartNetwork(NetRole.Client, screen);
             ShowClientWaitingMenu(screen);
@@ -1101,7 +1109,10 @@ namespace DeadCellsMultiplayerMod
 
                 if (role == NetRole.Host)
                 {
-                    ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
+                    if (_menuTransport == ConnectionTransport.Steam)
+                        ModEntry.Instance.StartSteamHostFromMenu();
+                    else
+                        ModEntry.Instance.StartHostFromMenu(_mpIp, _mpPort);
                     _waitingForHost = false;
                     try
                     {
@@ -1114,7 +1125,24 @@ namespace DeadCellsMultiplayerMod
                 }
                 else if (role == NetRole.Client)
                 {
-                    ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
+                    if (_menuTransport == ConnectionTransport.Steam)
+                    {
+                        if (_steamHostSteamId == 0UL)
+                        {
+                            _log?.Warning("[NetMod][Steam] Client start aborted: host Steam id is missing");
+                            ShowConnectionErrorPopup(
+                                screen,
+                                GetText.Instance.GetString("Steam join failed"),
+                                GetText.Instance.GetString("Steam host id is missing. Check console logs."),
+                                () => ShowJoinTransportMenu(screen));
+                            return;
+                        }
+                        ModEntry.Instance.StartSteamClientFromMenu(_steamHostSteamId);
+                    }
+                    else
+                    {
+                        ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
+                    }
                     lock (Sync)
                     {
                         _levelDescArrived = false;
@@ -1149,8 +1177,15 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
-            ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
+            if (_menuTransport == ConnectionTransport.Steam)
+            {
+                ModEntry.Instance.StartSteamHostFromMenu();
+            }
+            else
+            {
+                var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
+                ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
+            }
             _waitingForHost = false;
             // }
             // catch (Exception ex)
@@ -1552,6 +1587,7 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyActive = false;
             _steamLobbyId = 0;
             _steamLobbyCode = string.Empty;
+            _steamHostSteamId = 0UL;
             ConnectionUI.NotifyConnectionsChanged();
             if (_menuTransport == ConnectionTransport.Steam)
                 _menuTransport = ConnectionTransport.Lan;

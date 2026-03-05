@@ -61,18 +61,19 @@ namespace DeadCellsMultiplayerMod
         public static ModEntry? Instance { get; private set; }
         private bool _ready;
         private static bool s_hooksInstalled;
+        private const int MaxClientSlots = 3;
 
         private NetRole _netRole = NetRole.None;
         public static NetNode? _net;
 
         public dc.pr.Game? game;
 
-        public static GhostKing[] clients = new GhostKing[NetNode.MaxClientSlots];
-        public static Kinghead?[] clientHeads = new Kinghead?[NetNode.MaxClientSlots];
-        public static string?[] clientLabels = new string?[NetNode.MaxClientSlots];
-        public static int[] clientIds = new int[NetNode.MaxClientSlots];
-        public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
-        public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
+        public static GhostKing[] clients = new GhostKing[MaxClientSlots];
+        public static Kinghead?[] clientHeads = new Kinghead?[MaxClientSlots];
+        public static string?[] clientLabels = new string?[MaxClientSlots];
+        public static int[] clientIds = new int[MaxClientSlots];
+        public static string?[] clientSkins = new string?[MaxClientSlots];
+        public static string?[] clientHeadSkins = new string?[MaxClientSlots];
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
@@ -1050,8 +1051,8 @@ namespace DeadCellsMultiplayerMod
             lastDir = dir;
         }
 
-        public static double[] rLastX = new double[NetNode.MaxClientSlots];
-        public static double[] rLastY = new double[NetNode.MaxClientSlots];
+        public static double[] rLastX = new double[MaxClientSlots];
+        public static double[] rLastY = new double[MaxClientSlots];
 
         internal static bool TryGetClientIndex(int localId, int remoteId, out int index)
         {
@@ -1854,6 +1855,16 @@ namespace DeadCellsMultiplayerMod
             StartClientWithEndpoint(ep);
         }
 
+        public void StartSteamHostFromMenu()
+        {
+            StartHostWithSteamTransport();
+        }
+
+        public void StartSteamClientFromMenu(ulong hostSteamId)
+        {
+            StartClientWithSteamTransport(hostSteamId);
+        }
+
         private void StartHostWithEndpoint(IPEndPoint ep)
         {
             try
@@ -1911,6 +1922,67 @@ namespace DeadCellsMultiplayerMod
             catch (Exception ex)
             {
                 Logger.Error($"[NetMod] Client start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartHostWithSteamTransport()
+        {
+            try
+            {
+                _net?.Dispose();
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
+
+                _net = NetNode.CreateSteamHost(Logger);
+                _netRole = NetRole.Host;
+                GameMenu.SetRole(_netRole);
+                GameMenu.NetRef = _net;
+                ConnectionUI.NotifyConnectionsChanged();
+
+                Logger.Information("[NetMod] Host started with Steam P2P transport");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Steam host start failed: {ex.Message}");
+                _netRole = NetRole.None;
+                _net = null;
+                GameMenu.SetRole(_netRole);
+            }
+        }
+
+        private void StartClientWithSteamTransport(ulong hostSteamId)
+        {
+            try
+            {
+                _net?.Dispose();
+                try
+                {
+                    var main = dc.Main.Class.ME;
+                    if (main?.user != null)
+                        GameDataSync.RestoreOriginalUserState(main.user, true);
+                }
+                catch
+                {
+                }
+                ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                ResetLocalSkinSendCache();
+                ResetDoorMarkerState();
+
+                _net = NetNode.CreateSteamClient(Logger, hostSteamId);
+                _netRole = NetRole.Client;
+                GameMenu.SetRole(_netRole);
+                GameMenu.NetRef = _net;
+                ConnectionUI.NotifyConnectionsChanged();
+
+                Logger.Information("[NetMod] Client connecting via Steam P2P to hostSteamId={HostSteamId}", hostSteamId);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[NetMod] Steam client start failed: {ex.Message}");
                 _netRole = NetRole.None;
                 _net = null;
                 GameMenu.SetRole(_netRole);

@@ -9,6 +9,7 @@ using System.Globalization;
 using DeadCellsMultiplayerMod;
 using Serilog;
 using Serilog.Core;
+using Steamworks;
 
 public enum NetRole { None, Host, Client }
 
@@ -36,6 +37,24 @@ public sealed class NetNode : IDisposable
         {
             try { Stream.Close(); } catch { }
             try { Client.Close(); } catch { }
+            try { SendLock.Dispose(); } catch { }
+        }
+    }
+
+    private sealed class SteamClientConnection : IDisposable
+    {
+        public CSteamID SteamId { get; }
+        public SemaphoreSlim SendLock { get; } = new(1, 1);
+        public int AssignedId { get; }
+
+        public SteamClientConnection(CSteamID steamId, int assignedId)
+        {
+            SteamId = steamId;
+            AssignedId = assignedId;
+        }
+
+        public void Dispose()
+        {
             try { SendLock.Dispose(); } catch { }
         }
     }
@@ -381,6 +400,10 @@ public sealed class NetNode : IDisposable
     private TcpListener? _listener;   // host
     private TcpClient? _client;     // client
     private NetworkStream? _stream;
+    private Task? _steamTransportTask;
+    private readonly bool _useSteamTransport;
+    private readonly CSteamID _steamHostId;
+    private const int SteamP2PChannel = 0;
     private static int _connectedClientCount;
 
     private int ID;
@@ -395,6 +418,8 @@ public sealed class NetNode : IDisposable
 
     private readonly object _clientsLock = new();
     private readonly Dictionary<int, ClientConnection> _clients = new();
+    private readonly Dictionary<int, SteamClientConnection> _steamClients = new();
+    private readonly Dictionary<ulong, int> _steamClientIdsBySteam = new();
     private readonly Dictionary<int, RemoteState> _remotes = new();
     private readonly List<RemoteAttack> _pendingAttacks = new();
     private readonly List<RemoteChatMessage> _pendingChatMessages = new();
@@ -440,26 +465,39 @@ public sealed class NetNode : IDisposable
         {
             if (_role == NetRole.Host)
             {
-                lock (_clientsLock) return _clients.Count > 0;
+                lock (_clientsLock)
+                {
+                    if (_useSteamTransport)
+                        return _steamClients.Count > 0;
+                    return _clients.Count > 0;
+                }
             }
             lock (_sync) return _hasRemote;
         }
     }
     public bool IsAlive =>
-        (_role == NetRole.Host && _listener != null) ||
-        (_role == NetRole.Client && _client   != null);
+        _useSteamTransport
+            ? _cts != null && !_cts.IsCancellationRequested
+            : (_role == NetRole.Host && _listener != null) ||
+              (_role == NetRole.Client && _client != null);
     public bool IsHost => _role == NetRole.Host;
 
     public IPEndPoint? ListenerEndpoint =>
-        _listener != null ? (IPEndPoint?)_listener.LocalEndpoint : null;
+        _useSteamTransport
+            ? null
+            : _listener != null ? (IPEndPoint?)_listener.LocalEndpoint : null;
 
     public static NetNode CreateHost(ILogger log, IPEndPoint ep)  => new(log, NetRole.Host,  ep);
     public static NetNode CreateClient(ILogger log, IPEndPoint ep)=> new(log, NetRole.Client, ep);
+    public static NetNode CreateSteamHost(ILogger log) => new(log, NetRole.Host, new CSteamID(0));
+    public static NetNode CreateSteamClient(ILogger log, ulong hostSteamId) => new(log, NetRole.Client, new CSteamID(hostSteamId));
 
     private NetNode(ILogger log, NetRole role, IPEndPoint ep)
     {
         _log  = log;
         _role = role;
+        _useSteamTransport = false;
+        _steamHostId = new CSteamID(0);
 
         if (role == NetRole.Host)
         {
@@ -474,6 +512,27 @@ public sealed class NetNode : IDisposable
             _bindEp = new IPEndPoint(IPAddress.None, 0);
             StartClient();
             ID = 0;
+        }
+    }
+
+    private NetNode(ILogger log, NetRole role, CSteamID hostSteamId)
+    {
+        _log = log;
+        _role = role;
+        _useSteamTransport = true;
+        _steamHostId = hostSteamId;
+        _bindEp = new IPEndPoint(IPAddress.None, 0);
+        _destEp = new IPEndPoint(IPAddress.None, 0);
+
+        if (role == NetRole.Host)
+        {
+            ID = 1;
+            StartSteamHost();
+        }
+        else
+        {
+            ID = 0;
+            StartSteamClient();
         }
     }
 
@@ -499,6 +558,303 @@ public sealed class NetNode : IDisposable
         //     Dispose();
         //     throw;
         // }
+    }
+
+    private void StartSteamHost()
+    {
+        _cts = new CancellationTokenSource();
+        _log.Information("[NetNode] Host started with Steam P2P transport");
+        _steamTransportTask = Task.Run(() => SteamHostLoop(_cts.Token));
+    }
+
+    private void StartSteamClient()
+    {
+        _cts = new CancellationTokenSource();
+        _steamTransportTask = Task.Run(() => SteamClientLoop(_cts.Token));
+        _ = Task.Run(() => ConnectWithRetrySteamAsync(_cts.Token));
+    }
+
+    private async Task ConnectWithRetrySteamAsync(CancellationToken ct)
+    {
+        var maxAttempts = GameMenu.ClientConnectMaxAttempts;
+        var attempt = 0;
+
+        if (_steamHostId.m_SteamID == 0UL)
+        {
+            _log.Warning("[NetNode] Steam client host id is missing");
+            GameMenu.EnqueueMainThread(GameMenu.NotifyClientConnectFailed);
+            return;
+        }
+
+        while (!ct.IsCancellationRequested && attempt < maxAttempts)
+        {
+            attempt++;
+            GameMenu.EnqueueMainThread(() => GameMenu.NotifyClientConnectAttempt(attempt));
+            _log.Information("[NetNode] Steam client connecting to hostSteamId={HostSteamId}", _steamHostId.m_SteamID);
+
+            await SendLineToSteamPeerSafe(_steamHostId, _sendLock, "HELLO\n").ConfigureAwait(false);
+
+            var connected = false;
+            var startedAt = DateTime.UtcNow;
+            while (!ct.IsCancellationRequested && DateTime.UtcNow - startedAt < TimeSpan.FromSeconds(4))
+            {
+                lock (_sync)
+                {
+                    connected = _hasRemote;
+                }
+                if (connected)
+                    break;
+
+                await Task.Delay(150, ct).ConfigureAwait(false);
+            }
+
+            if (connected)
+            {
+                if (ID <= 0)
+                {
+                    _log.Warning("[NetNode] Steam client connected without assigned ID yet; requesting handshake refresh");
+                    await SendLineToSteamPeerSafe(_steamHostId, _sendLock, "HELLO\n").ConfigureAwait(false);
+                }
+
+                GameMenu.EnqueueMainThread(() =>
+                {
+                    GameMenu.NetRef = this;
+                    GameMenu.SetRole(_role);
+                    GameMenu.NotifyRemoteConnected(_role);
+                });
+                return;
+            }
+
+            if (attempt >= maxAttempts)
+            {
+                GameMenu.EnqueueMainThread(GameMenu.NotifyClientConnectFailed);
+                break;
+            }
+
+            await Task.Delay(1500, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SteamHostLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var hasPacket = false;
+            try
+            {
+                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannel))
+                {
+                    hasPacket = true;
+                    if (packetSize == 0 || packetSize > 1024 * 1024)
+                    {
+                        break;
+                    }
+
+                    var buffer = new byte[packetSize];
+                    if (!SteamNetworking.ReadP2PPacket(buffer, packetSize, out uint bytesRead, out CSteamID remoteSteamId, SteamP2PChannel))
+                        break;
+
+                    if (bytesRead == 0)
+                        continue;
+
+                    try { SteamNetworking.AcceptP2PSessionWithUser(remoteSteamId); } catch { }
+
+                    if (!TryGetOrRegisterSteamClient(remoteSteamId, out var connection) || connection == null)
+                        continue;
+
+                    var payload = Encoding.UTF8.GetString(buffer, 0, (int)bytesRead);
+                    ProcessIncomingSteamPayload(payload, connection.AssignedId, connection);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warning("[NetNode] Steam host loop error: {msg}", ex.Message);
+            }
+
+            TryRunSteamCallbacks();
+            if (!hasPacket)
+                await Task.Delay(8, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SteamClientLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var hasPacket = false;
+            try
+            {
+                while (SteamNetworking.IsP2PPacketAvailable(out uint packetSize, SteamP2PChannel))
+                {
+                    hasPacket = true;
+                    if (packetSize == 0 || packetSize > 1024 * 1024)
+                        break;
+
+                    var buffer = new byte[packetSize];
+                    if (!SteamNetworking.ReadP2PPacket(buffer, packetSize, out uint bytesRead, out CSteamID remoteSteamId, SteamP2PChannel))
+                        break;
+
+                    if (bytesRead == 0)
+                        continue;
+                    if (_steamHostId.m_SteamID != 0UL && remoteSteamId.m_SteamID != _steamHostId.m_SteamID)
+                        continue;
+
+                    try { SteamNetworking.AcceptP2PSessionWithUser(remoteSteamId); } catch { }
+                    var payload = Encoding.UTF8.GetString(buffer, 0, (int)bytesRead);
+                    ProcessIncomingSteamPayload(payload, 1, null);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warning("[NetNode] Steam client loop error: {msg}", ex.Message);
+            }
+
+            TryRunSteamCallbacks();
+            if (!hasPacket)
+                await Task.Delay(8, ct).ConfigureAwait(false);
+        }
+    }
+
+    private void TryRunSteamCallbacks()
+    {
+        try
+        {
+            SteamAPI.RunCallbacks();
+        }
+        catch
+        {
+        }
+    }
+
+    private bool TryGetOrRegisterSteamClient(CSteamID remoteSteamId, out SteamClientConnection? connection)
+    {
+        connection = null;
+        var steamKey = remoteSteamId.m_SteamID;
+
+        int existingId;
+        lock (_clientsLock)
+        {
+            if (_steamClientIdsBySteam.TryGetValue(steamKey, out existingId) &&
+                _steamClients.TryGetValue(existingId, out var existingConnection))
+            {
+                connection = existingConnection;
+                return true;
+            }
+        }
+
+        int assignedId;
+        lock (UsedClientIds)
+        {
+            assignedId = ClientIds.FirstOrDefault(id => !UsedClientIds.Contains(id));
+            if (assignedId == 0)
+            {
+                _log.Warning("[NetNode] Max players reached, ignoring Steam client {SteamId}", steamKey);
+                return false;
+            }
+            UsedClientIds.Add(assignedId);
+        }
+
+        var newConnection = new SteamClientConnection(remoteSteamId, assignedId);
+        lock (_clientsLock)
+        {
+            _steamClients[assignedId] = newConnection;
+            _steamClientIdsBySteam[steamKey] = assignedId;
+            _connectedClientCount = _steamClients.Count;
+        }
+        lock (_sync)
+        {
+            if (_primaryRemoteId == 0)
+                _primaryRemoteId = assignedId;
+            _hasRemote = true;
+        }
+
+        connection = newConnection;
+        _ = Task.Run(() => SendInitialStateToSteamClient(newConnection));
+        GameMenu.EnqueueMainThread(() =>
+        {
+            GameMenu.NetRef = this;
+            GameMenu.SetRole(_role);
+            GameMenu.NotifyRemoteConnected(_role);
+        });
+        return true;
+    }
+
+    private async Task SendInitialStateToSteamClient(SteamClientConnection connection)
+    {
+        await SendLineToSteamClientSafe(connection, "WELCOME\n").ConfigureAwait(false);
+
+        int? cachedBossRune;
+        int? cachedSeed;
+        int? cachedSerializerSeq;
+        int? cachedSerializerUid;
+        string? cachedCountersPayload;
+        string? cachedBlueprintsPayload;
+        string? cachedLevelGraphPayload;
+        lock (_hostCacheSync)
+        {
+            cachedBossRune = _cachedHostBossRune;
+            cachedSeed = _cachedHostSeed;
+            cachedSerializerSeq = _cachedHostSerializerSeq;
+            cachedSerializerUid = _cachedHostSerializerUid;
+            cachedCountersPayload = _cachedHostCountersPayload;
+            cachedBlueprintsPayload = _cachedHostBlueprintsPayload;
+            cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
+        }
+
+        if (cachedSerializerSeq.HasValue && cachedSerializerUid.HasValue)
+            await SendLineToSteamClientSafe(connection, $"HXSYNC|{cachedSerializerSeq.Value}|{cachedSerializerUid.Value}\n").ConfigureAwait(false);
+        if (cachedBossRune.HasValue)
+            await SendLineToSteamClientSafe(connection, $"BOSSRUNE|{cachedBossRune.Value}\n").ConfigureAwait(false);
+        if (cachedSeed.HasValue)
+            await SendLineToSteamClientSafe(connection, $"SEED|{cachedSeed.Value}\n").ConfigureAwait(false);
+        if (cachedCountersPayload != null)
+            await SendLineToSteamClientSafe(connection, $"COUNTERS|{cachedCountersPayload}\n").ConfigureAwait(false);
+        if (cachedBlueprintsPayload != null)
+            await SendLineToSteamClientSafe(connection, $"BLUEPRINTS|{cachedBlueprintsPayload}\n").ConfigureAwait(false);
+        if (cachedLevelGraphPayload != null)
+            await SendLineToSteamClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
+
+        await SendLineToSteamClientSafe(connection, $"ID|{connection.AssignedId}\n").ConfigureAwait(false);
+        await SendKnownUsersToSteamClientSafe(connection).ConfigureAwait(false);
+        if (_role == NetRole.Host && TryBuildLocalHpLine(out var localHpLine))
+            await SendLineToSteamClientSafe(connection, localHpLine).ConfigureAwait(false);
+    }
+
+    private void ProcessIncomingSteamPayload(string payload, int senderId, SteamClientConnection? senderConnection)
+    {
+        if (string.IsNullOrEmpty(payload))
+            return;
+
+        var lines = payload.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if (line.Length == 0)
+                continue;
+
+            var lineCopy = line;
+            GameMenu.EnqueueMainThread(() =>
+            {
+                try
+                {
+                    if (!HandleLine(lineCopy, senderId, out var forwardLine))
+                    {
+                        if (_role == NetRole.Host && senderConnection != null)
+                            CleanupHostSteamClient(senderConnection);
+                        else
+                            CleanupClient();
+                        return;
+                    }
+
+                    if (_role == NetRole.Host && senderConnection != null && forwardLine != null)
+                        ForwardLineToOtherSteamClients(senderConnection, forwardLine);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning("[NetNode] Steam HandleLine(main-thread) failed: {msg}", ex.Message);
+                }
+            });
+        }
     }
 
     private async Task AcceptLoop(CancellationToken ct)
@@ -872,6 +1228,17 @@ public sealed class NetNode : IDisposable
         if (line.StartsWith("HELLO"))
         {
             lock (_sync) _hasRemote = true;
+            if (_role == NetRole.Host && _useSteamTransport && senderId.HasValue)
+            {
+                SteamClientConnection? steamConnection = null;
+                lock (_clientsLock)
+                {
+                    _steamClients.TryGetValue(senderId.Value, out steamConnection);
+                }
+
+                if (steamConnection != null)
+                    _ = Task.Run(() => SendInitialStateToSteamClient(steamConnection));
+            }
             return true;
         }
 
@@ -1503,6 +1870,20 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    private void ForwardLineToOtherSteamClients(SteamClientConnection sender, string line)
+    {
+        List<SteamClientConnection> snapshot;
+        lock (_clientsLock)
+        {
+            snapshot = _steamClients.Values.Where(c => c.AssignedId != sender.AssignedId).ToList();
+        }
+
+        foreach (var client in snapshot)
+        {
+            _ = SendLineToSteamClientSafe(client, line);
+        }
+    }
+
     private void CleanupHostClient(ClientConnection sender)
     {
         bool hasClients;
@@ -1548,6 +1929,45 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    private void CleanupHostSteamClient(SteamClientConnection sender)
+    {
+        bool hasClients;
+        lock (_clientsLock)
+        {
+            _steamClients.Remove(sender.AssignedId);
+            _steamClientIdsBySteam.Remove(sender.SteamId.m_SteamID);
+            _connectedClientCount = _steamClients.Count;
+            hasClients = _connectedClientCount > 0;
+        }
+
+        try { SteamNetworking.CloseP2PSessionWithUser(sender.SteamId); } catch { }
+        sender.Dispose();
+
+        if (sender.AssignedId >= 2)
+        {
+            lock (UsedClientIds)
+            {
+                UsedClientIds.Remove(sender.AssignedId);
+            }
+        }
+
+        lock (_sync)
+        {
+            RemoveRemoteLocked(sender.AssignedId);
+            _pendingAttacks.RemoveAll(a => a.Id == sender.AssignedId);
+            _pendingChatMessages.RemoveAll(m => m.Id == sender.AssignedId);
+            _pendingMobHits.RemoveAll(h => h.UserId == sender.AssignedId);
+            _pendingMobDies.RemoveAll(d => d.UserId == sender.AssignedId);
+            _pendingExitReadyStates.RemoveAll(s => s.UserId == sender.AssignedId);
+            _pendingPlayerDownStates.RemoveAll(s => s.UserId == sender.AssignedId);
+            _pendingPlayerReviveRequests.RemoveAll(s => s.ReviverId == sender.AssignedId || s.TargetId == sender.AssignedId);
+            _hasRemote = hasClients;
+        }
+
+        if (!hasClients)
+            GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
+    }
+
     private void CleanupClient()
     {
         lock (_sync)
@@ -1567,7 +1987,17 @@ public sealed class NetNode : IDisposable
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
         }
-        CloseClientConnection();
+        if (_useSteamTransport)
+        {
+            if (_steamHostId.m_SteamID != 0UL)
+            {
+                try { SteamNetworking.CloseP2PSessionWithUser(_steamHostId); } catch { }
+            }
+        }
+        else
+        {
+            CloseClientConnection();
+        }
         GameMenu.EnqueueMainThread(() => GameMenu.NotifyRemoteDisconnected(_role));
     }
 
@@ -2362,8 +2792,16 @@ public sealed class NetNode : IDisposable
     {
         if (_role == NetRole.Host)
         {
-            lock (_clientsLock) return _clients.Count > 0;
+            lock (_clientsLock)
+            {
+                return _useSteamTransport ? _steamClients.Count > 0 : _clients.Count > 0;
+            }
         }
+        if (_useSteamTransport)
+        {
+            lock (_sync) return _hasRemote;
+        }
+
         return _stream != null && _client != null && _client.Connected;
     }
 
@@ -2371,6 +2809,9 @@ public sealed class NetNode : IDisposable
     {
         if (_role == NetRole.Host)
             return BroadcastLineSafe(line);
+
+        if (_useSteamTransport)
+            return SendLineToSteamPeerSafe(_steamHostId, _sendLock, line);
 
         return SendLineToStreamSafe(_stream, _sendLock, line);
     }
@@ -2382,6 +2823,19 @@ public sealed class NetNode : IDisposable
 
     private async Task BroadcastLineSafe(string line)
     {
+        if (_useSteamTransport)
+        {
+            List<SteamClientConnection> steamSnapshot;
+            lock (_clientsLock)
+            {
+                steamSnapshot = _steamClients.Values.ToList();
+            }
+            if (steamSnapshot.Count == 0) return;
+            var steamTasks = steamSnapshot.Select(client => SendLineToSteamClientSafe(client, line));
+            await Task.WhenAll(steamTasks).ConfigureAwait(false);
+            return;
+        }
+
         List<ClientConnection> snapshot;
         lock (_clientsLock)
         {
@@ -2412,6 +2866,26 @@ public sealed class NetNode : IDisposable
         }
     }
 
+    private async Task SendKnownUsersToSteamClientSafe(SteamClientConnection connection)
+    {
+        List<RemoteState> snapshot;
+        lock (_sync)
+        {
+            if (_remotes.Count == 0)
+                return;
+            snapshot = new List<RemoteState>(_remotes.Values);
+        }
+
+        foreach (var state in snapshot)
+        {
+            var username = state.Username;
+            if (string.IsNullOrWhiteSpace(username))
+                continue;
+            var line = BuildTaggedLine("USER", state.Id, username);
+            await SendLineToSteamClientSafe(connection, line).ConfigureAwait(false);
+        }
+    }
+
     private async Task SendLineToStreamSafe(NetworkStream? stream, SemaphoreSlim? sendLock, string line)
     {
         if (stream == null || sendLock == null) return;
@@ -2433,6 +2907,43 @@ public sealed class NetNode : IDisposable
         finally
         {
             if (locked) sendLock.Release();
+        }
+    }
+
+    private Task SendLineToSteamClientSafe(SteamClientConnection client, string line)
+    {
+        return SendLineToSteamPeerSafe(client.SteamId, client.SendLock, line);
+    }
+
+    private async Task SendLineToSteamPeerSafe(CSteamID steamId, SemaphoreSlim? sendLock, string line)
+    {
+        if (sendLock == null || steamId.m_SteamID == 0UL)
+            return;
+
+        var bytes = Encoding.UTF8.GetBytes(line);
+        bool locked = false;
+        try
+        {
+            await sendLock.WaitAsync().ConfigureAwait(false);
+            locked = true;
+            var sent = SteamNetworking.SendP2PPacket(
+                steamId,
+                bytes,
+                (uint)bytes.Length,
+                EP2PSend.k_EP2PSendReliable,
+                SteamP2PChannel);
+
+            if (!sent)
+                _log.Warning("[NetNode] Steam send failed to {SteamId}", steamId.m_SteamID);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning("[NetNode] Steam send error: {msg}", ex.Message);
+        }
+        finally
+        {
+            if (locked)
+                sendLock.Release();
         }
     }
 
@@ -3326,10 +3837,14 @@ public sealed class NetNode : IDisposable
         _disposed = true;
         try { _cts?.Cancel(); } catch { }
         List<ClientConnection> clients;
+        List<SteamClientConnection> steamClients;
         lock (_clientsLock)
         {
             clients = _clients.Values.ToList();
+            steamClients = _steamClients.Values.ToList();
             _clients.Clear();
+            _steamClients.Clear();
+            _steamClientIdsBySteam.Clear();
             _connectedClientCount = 0;
         }
         foreach (var client in clients)
@@ -3343,9 +3858,28 @@ public sealed class NetNode : IDisposable
                 }
             }
         }
+        foreach (var steamClient in steamClients)
+        {
+            try { SteamNetworking.CloseP2PSessionWithUser(steamClient.SteamId); } catch { }
+            try { steamClient.Dispose(); } catch { }
+            if (steamClient.AssignedId >= 2)
+            {
+                lock (UsedClientIds)
+                {
+                    UsedClientIds.Remove(steamClient.AssignedId);
+                }
+            }
+        }
+
+        if (_useSteamTransport && _steamHostId.m_SteamID != 0UL)
+        {
+            try { SteamNetworking.CloseP2PSessionWithUser(_steamHostId); } catch { }
+        }
+
         try { _stream?.Close(); } catch { }
         try { _client?.Close(); } catch { }
         try { _listener?.Stop(); } catch { }
+        try { _steamTransportTask?.Wait(200); } catch { }
         GameDataSync.Seed = 0;
         lock (_hostCacheSync)
         {

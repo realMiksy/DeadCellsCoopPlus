@@ -33,6 +33,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
         private readonly List<HSprite> sprites = new();
         private readonly List<dc.ui.Text> connectionLabels = new();
         private readonly List<string> lastConnections = new();
+        private dc.ui.Text? lobbyCodeTitleLabel;
         private dc.ui.Text? lobbyIdLabel;
         private string lastLobbyIdLabelText = string.Empty;
 
@@ -196,6 +197,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
 
         private void clean()
         {
+            this.lobbyCodeTitleLabel?.remove();
+            this.lobbyCodeTitleLabel = null;
             this.lobbyIdLabel?.remove();
             this.lobbyIdLabel = null;
             this.lastLobbyIdLabelText = string.Empty;
@@ -226,6 +229,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             double flowW = this.rootFlow.get_innerWidth();
             double flowH = this.rootFlow.get_innerHeight();
 
+            this.lobbyCodeTitleLabel?.remove();
+            this.lobbyCodeTitleLabel = null;
             this.lobbyIdLabel?.remove();
             this.lobbyIdLabel = null;
             this.lastLobbyIdLabelText = string.Empty;
@@ -386,6 +391,8 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             var lobbyCode = GameMenu.GetSteamLobbyCodeForUi();
             if (string.IsNullOrWhiteSpace(lobbyCode))
             {
+                if (this.lobbyCodeTitleLabel != null)
+                    this.lobbyCodeTitleLabel.set_visible(false);
                 if (this.lobbyIdLabel != null)
                     this.lobbyIdLabel.set_visible(false);
                 this.lastLobbyIdLabelText = string.Empty;
@@ -393,7 +400,24 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             }
 
             var uiScale = UiScale.GetResolutionScale();
-            var labelText = $"id: {lobbyCode}";
+            var titleText = "lobby code";
+            var labelText = lobbyCode.Trim().ToLowerInvariant();
+
+            if (this.lobbyCodeTitleLabel == null)
+            {
+                this.lobbyCodeTitleLabel = Assets.Class.makeText(
+                    titleText.AsHaxeString(),
+                    Tools.MultiColor.ColorFromHex("#9ea8b3"),
+                    false,
+                    this.bg);
+                this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
+                this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
+            }
+            else
+            {
+                this.lobbyCodeTitleLabel.scaleX = 0.44 * uiScale;
+                this.lobbyCodeTitleLabel.scaleY = 0.44 * uiScale;
+            }
 
             if (this.lobbyIdLabel == null)
             {
@@ -402,14 +426,14 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                     Tools.MultiColor.ColorFromHex("#7fd4ff"),
                     true,
                     this.bg);
-                this.lobbyIdLabel.scaleX = 0.54 * uiScale;
-                this.lobbyIdLabel.scaleY = 0.54 * uiScale;
+                // this.lobbyIdLabel.scaleX = 0.54 * uiScale;
+                // this.lobbyIdLabel.scaleY = 0.54 * uiScale;
                 forceRefreshText = true;
             }
             else
             {
-                this.lobbyIdLabel.scaleX = 0.54 * uiScale;
-                this.lobbyIdLabel.scaleY = 0.54 * uiScale;
+                // this.lobbyIdLabel.scaleX = 0.54 * uiScale;
+                // this.lobbyIdLabel.scaleY = 0.54 * uiScale;
             }
 
             if (forceRefreshText || !string.Equals(this.lastLobbyIdLabelText, labelText, StringComparison.Ordinal))
@@ -418,18 +442,21 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                 this.lastLobbyIdLabelText = labelText;
             }
 
-            var textWidth = this.lobbyIdLabel.textWidth * this.lobbyIdLabel.scaleX;
             var textHeight = this.lobbyIdLabel.textHeight * this.lobbyIdLabel.scaleY;
-            var rightPadding = 10.0 * uiScale;
+            var titleHeight = this.lobbyCodeTitleLabel!.textHeight * this.lobbyCodeTitleLabel.scaleY;
+            var leftPadding = 10.0 * uiScale;
             var bottomPadding = 8.0 * uiScale;
+            var spacing = 2.0 * uiScale;
 
-            this.lobbyIdLabel.x = System.Math.Max(2.0, this.bg.wid - textWidth - rightPadding);
+            this.lobbyIdLabel.x = System.Math.Max(2.0, leftPadding);
             this.lobbyIdLabel.y = System.Math.Max(2.0, this.bg.hei - textHeight - bottomPadding);
             this.lobbyIdLabel.set_visible(true);
-            if(lobbyIdLabel is not null)
-            {
-                this.MainTitleflow.addChild(lobbyIdLabel);
-            }
+
+            this.lobbyCodeTitleLabel.x = System.Math.Max(2.0, leftPadding);
+            this.lobbyCodeTitleLabel.y = System.Math.Max(2.0, this.lobbyIdLabel.y - titleHeight - spacing);
+            this.lobbyCodeTitleLabel.set_visible(true);
+            this.MainTitleflow.addChild(lobbyCodeTitleLabel);
+            this.MainTitleflow.addChild(lobbyIdLabel);
         }
 
         private bool NeedsConnectionsRefresh(List<string> names)

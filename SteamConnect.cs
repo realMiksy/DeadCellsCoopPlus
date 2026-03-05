@@ -24,7 +24,8 @@ namespace DeadCellsMultiplayerMod
         private const string HostPortLobbyKey = "dccm_host_port";
         private const string ModMarkerLobbyKey = "dccm_mod";
         private const string ModMarkerLobbyValue = "DeadCellsMultiplayerMod";
-        private const string LobbyCodePrefix = "DC";
+        private const string LobbyCodeLobbyKey = "dccm_code";
+        private const string LobbyCodePrefix = "dc";
 
         private const string EnvRequestPath = "DCCM_STEAM_CONNECT_REQUEST_PATH";
         private const string EnvResponsePath = "DCCM_STEAM_CONNECT_RESPONSE_PATH";
@@ -92,6 +93,7 @@ namespace DeadCellsMultiplayerMod
         {
             public bool Success { get; init; }
             public ulong LobbyId { get; init; }
+            public ulong HostSteamId { get; init; }
             public string PersonaName { get; init; } = string.Empty;
             public IPEndPoint? Endpoint { get; init; }
             public string Error { get; init; } = string.Empty;
@@ -101,6 +103,7 @@ namespace DeadCellsMultiplayerMod
         {
             public string Mode { get; set; } = string.Empty;
             public ulong LobbyId { get; set; }
+            public string LobbyCode { get; set; } = string.Empty;
             public string HostIp { get; set; } = string.Empty;
             public int HostPort { get; set; }
             public string StopSignalPath { get; set; } = string.Empty;
@@ -111,6 +114,7 @@ namespace DeadCellsMultiplayerMod
             public bool Success { get; set; }
             public string Error { get; set; } = string.Empty;
             public ulong LobbyId { get; set; }
+            public ulong HostSteamId { get; set; }
             public string HostIp { get; set; } = string.Empty;
             public int HostPort { get; set; }
             public string PersonaName { get; set; } = string.Empty;
@@ -157,13 +161,15 @@ namespace DeadCellsMultiplayerMod
                 Error = "Clipboard does not contain a valid Steam lobby id"
             };
 
-            if (!TryReadLobbyIdFromClipboard(out var lobbyId))
+            var clipboardText = TryGetClipboardText();
+            if (!TryParseLobbyInput(clipboardText, out var lobbyId, out var lobbyCode))
                 return false;
 
             var request = new WorkerRequest
             {
                 Mode = "join",
-                LobbyId = lobbyId
+                LobbyId = lobbyId,
+                LobbyCode = lobbyCode
             };
 
             if (!TryRunWorker(request, out var response))
@@ -172,6 +178,7 @@ namespace DeadCellsMultiplayerMod
                 {
                     Success = false,
                     LobbyId = lobbyId,
+                    HostSteamId = response.HostSteamId,
                     PersonaName = response.PersonaName ?? string.Empty,
                     Error = string.IsNullOrWhiteSpace(response.Error)
                         ? "Steam worker process failed"
@@ -180,25 +187,30 @@ namespace DeadCellsMultiplayerMod
                 return false;
             }
 
-            if (!IPAddress.TryParse(response.HostIp, out var hostIp))
+            IPEndPoint? endpoint = null;
+            if (IPAddress.TryParse(response.HostIp, out var hostIp))
+                endpoint = new IPEndPoint(hostIp, NormalizePort(response.HostPort));
+
+            if (endpoint == null && response.HostSteamId == 0UL)
             {
                 result = new JoinLobbyResult
                 {
                     Success = false,
                     LobbyId = response.LobbyId,
+                    HostSteamId = response.HostSteamId,
                     PersonaName = response.PersonaName ?? string.Empty,
                     Error = "Lobby host IP is invalid"
                 };
                 return false;
             }
 
-            var port = NormalizePort(response.HostPort);
             result = new JoinLobbyResult
             {
                 Success = true,
                 LobbyId = response.LobbyId,
+                HostSteamId = response.HostSteamId,
                 PersonaName = response.PersonaName ?? string.Empty,
-                Endpoint = new IPEndPoint(hostIp, port),
+                Endpoint = endpoint,
                 Error = string.Empty
             };
 
@@ -284,7 +296,7 @@ namespace DeadCellsMultiplayerMod
                 return string.Empty;
 
             Span<char> buffer = stackalloc char[32];
-            const string alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            const string alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
             var value = lobbyId;
             var index = buffer.Length;
 
@@ -302,12 +314,15 @@ namespace DeadCellsMultiplayerMod
         {
             lobbyId = 0;
             var text = TryGetClipboardText();
-            return TryParseLobbyId(text, out lobbyId);
+            if (!TryParseLobbyInput(text, out lobbyId, out _))
+                return false;
+            return lobbyId > 0;
         }
 
-        private static bool TryParseLobbyId(string? text, out ulong lobbyId)
+        private static bool TryParseLobbyInput(string? text, out ulong lobbyId, out string lobbyCode)
         {
             lobbyId = 0;
+            lobbyCode = string.Empty;
             if (string.IsNullOrWhiteSpace(text))
                 return false;
 
@@ -325,14 +340,26 @@ namespace DeadCellsMultiplayerMod
                 return true;
             }
 
-            var codeMatch = Regex.Match(raw, @"\bDC[A-Za-z0-9]{6,}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-            if (codeMatch.Success && TryDecodeLobbyCode(codeMatch.Value, out var decoded))
+            var codeMatch = Regex.Match(raw, @"\bdc[a-z0-9]{6,}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            if (codeMatch.Success)
             {
-                lobbyId = decoded;
+                lobbyCode = NormalizeLobbyCode(codeMatch.Value);
+                lobbyId = 0;
                 return true;
             }
 
             return false;
+        }
+
+        private static string NormalizeLobbyCode(string? rawCode)
+        {
+            if (string.IsNullOrWhiteSpace(rawCode))
+                return string.Empty;
+
+            var normalized = rawCode.Trim().ToLowerInvariant();
+            if (!normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal))
+                return string.Concat(LobbyCodePrefix, normalized);
+            return normalized;
         }
 
         private static bool TryDecodeLobbyCode(string rawCode, out ulong lobbyId)
@@ -341,8 +368,8 @@ namespace DeadCellsMultiplayerMod
             if (string.IsNullOrWhiteSpace(rawCode))
                 return false;
 
-            var normalized = rawCode.Trim().ToUpperInvariant();
-            if (normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal))
+            var normalized = rawCode.Trim().ToLowerInvariant();
+            if (normalized.StartsWith(LobbyCodePrefix, StringComparison.OrdinalIgnoreCase))
                 normalized = normalized.Substring(LobbyCodePrefix.Length);
 
             if (normalized.Length == 0)
@@ -357,8 +384,8 @@ namespace DeadCellsMultiplayerMod
                     int digit;
                     if (ch >= '0' && ch <= '9')
                         digit = ch - '0';
-                    else if (ch >= 'A' && ch <= 'Z')
-                        digit = 10 + (ch - 'A');
+                    else if (ch >= 'a' && ch <= 'z')
+                        digit = 10 + (ch - 'a');
                     else
                         return false;
 
@@ -776,7 +803,7 @@ namespace DeadCellsMultiplayerMod
             var hostPort = NormalizePort(request.HostPort);
             var hostIp = string.IsNullOrWhiteSpace(request.HostIp) ? "127.0.0.1" : request.HostIp.Trim();
 
-            var createCall = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2);
+            var createCall = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypePublic, 2);
             if (!TryWaitForCallResult(
                     createCall,
                     out LobbyCreated_t created,
@@ -810,11 +837,13 @@ namespace DeadCellsMultiplayerMod
 
             var lobbyId = created.m_ulSteamIDLobby;
             var lobby = new CSteamID(lobbyId);
+            var lobbyCode = BuildLobbyCodeFromLobbyId(lobbyId);
             SteamMatchmaking.SetLobbyJoinable(lobby, true);
-            SteamMatchmaking.SetLobbyType(lobby, ELobbyType.k_ELobbyTypeFriendsOnly);
+            SteamMatchmaking.SetLobbyType(lobby, ELobbyType.k_ELobbyTypePublic);
             SteamMatchmaking.SetLobbyData(lobby, HostIpLobbyKey, hostIp);
             SteamMatchmaking.SetLobbyData(lobby, HostPortLobbyKey, hostPort.ToString(CultureInfo.InvariantCulture));
             SteamMatchmaking.SetLobbyData(lobby, ModMarkerLobbyKey, ModMarkerLobbyValue);
+            SteamMatchmaking.SetLobbyData(lobby, LobbyCodeLobbyKey, lobbyCode);
 
             var response = new WorkerResponse
             {
@@ -871,16 +900,27 @@ namespace DeadCellsMultiplayerMod
 
         private static WorkerResponse ExecuteJoin(WorkerRequest request)
         {
-            if (request.LobbyId == 0)
+            var requestedCode = NormalizeLobbyCode(request.LobbyCode);
+            ulong targetLobbyId = request.LobbyId;
+
+            if (!string.IsNullOrWhiteSpace(requestedCode))
+            {
+                if (TryResolveLobbyIdByCode(requestedCode, out var resolvedLobbyId, out _))
+                    targetLobbyId = resolvedLobbyId;
+            }
+
+            if (targetLobbyId == 0)
             {
                 return new WorkerResponse
                 {
                     Success = false,
-                    Error = "Steam lobby id is invalid"
+                    Error = string.IsNullOrWhiteSpace(requestedCode)
+                        ? "Steam lobby id is invalid"
+                        : "Steam lobby code does not exist"
                 };
             }
 
-            var lobby = new CSteamID(request.LobbyId);
+            var lobby = new CSteamID(targetLobbyId);
             var joinCall = SteamMatchmaking.JoinLobby(lobby);
             if (!TryWaitForCallResult(
                     joinCall,
@@ -907,14 +947,36 @@ namespace DeadCellsMultiplayerMod
             var enterResponse = (EChatRoomEnterResponse)entered.m_EChatRoomEnterResponse;
             if (enterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
             {
+                if (enterResponse == EChatRoomEnterResponse.k_EChatRoomEnterResponseDoesntExist &&
+                    request.LobbyId != 0 &&
+                    request.LobbyId != targetLobbyId)
+                {
+                    lobby = new CSteamID(request.LobbyId);
+                    joinCall = SteamMatchmaking.JoinLobby(lobby);
+                    if (TryWaitForCallResult(
+                            joinCall,
+                            out entered,
+                            out ioFailure,
+                            out waitError) &&
+                        !ioFailure)
+                    {
+                        enterResponse = (EChatRoomEnterResponse)entered.m_EChatRoomEnterResponse;
+                        targetLobbyId = request.LobbyId;
+                    }
+                }
+
+                if (enterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
+                {
                 return new WorkerResponse
                 {
                     Success = false,
                     Error = $"Steam lobby join failed ({enterResponse})"
                 };
+                }
             }
 
             var joinedLobby = new CSteamID(entered.m_ulSteamIDLobby);
+            ulong hostSteamId = 0UL;
             var hostIp = string.Empty;
             var hostPortRaw = string.Empty;
 
@@ -922,9 +984,17 @@ namespace DeadCellsMultiplayerMod
             var timeoutTicks = (long)(Stopwatch.Frequency * 4.0);
             while (Stopwatch.GetTimestamp() - start < timeoutTicks)
             {
+                try
+                {
+                    hostSteamId = SteamMatchmaking.GetLobbyOwner(joinedLobby).m_SteamID;
+                }
+                catch
+                {
+                    hostSteamId = 0UL;
+                }
                 hostIp = SteamMatchmaking.GetLobbyData(joinedLobby, HostIpLobbyKey) ?? string.Empty;
                 hostPortRaw = SteamMatchmaking.GetLobbyData(joinedLobby, HostPortLobbyKey) ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(hostIp) && !string.IsNullOrWhiteSpace(hostPortRaw))
+                if (hostSteamId != 0UL && !string.IsNullOrWhiteSpace(hostIp) && !string.IsNullOrWhiteSpace(hostPortRaw))
                     break;
 
                 SteamAPI.RunCallbacks();
@@ -956,11 +1026,70 @@ namespace DeadCellsMultiplayerMod
             return new WorkerResponse
             {
                 Success = true,
-                LobbyId = request.LobbyId,
+                LobbyId = targetLobbyId,
+                HostSteamId = hostSteamId,
                 HostIp = hostIp,
                 HostPort = NormalizePort(hostPort),
                 PersonaName = SafeGetPersonaName()
             };
+        }
+
+        private static bool TryResolveLobbyIdByCode(string lobbyCode, out ulong lobbyId, out string error)
+        {
+            lobbyId = 0UL;
+            error = string.Empty;
+
+            var normalizedCode = NormalizeLobbyCode(lobbyCode);
+            if (string.IsNullOrWhiteSpace(normalizedCode))
+            {
+                error = "Steam lobby code is invalid";
+                return false;
+            }
+
+            SteamMatchmaking.AddRequestLobbyListStringFilter(
+                ModMarkerLobbyKey,
+                ModMarkerLobbyValue,
+                ELobbyComparison.k_ELobbyComparisonEqual);
+            SteamMatchmaking.AddRequestLobbyListStringFilter(
+                LobbyCodeLobbyKey,
+                normalizedCode,
+                ELobbyComparison.k_ELobbyComparisonEqual);
+            SteamMatchmaking.AddRequestLobbyListResultCountFilter(8);
+
+            var listCall = SteamMatchmaking.RequestLobbyList();
+            if (!TryWaitForCallResult(
+                    listCall,
+                    out LobbyMatchList_t matches,
+                    out var ioFailure,
+                    out var waitError))
+            {
+                error = waitError;
+                return false;
+            }
+
+            if (ioFailure)
+            {
+                error = "Steam lobby list request failed (I/O failure)";
+                return false;
+            }
+
+            var count = (int)matches.m_nLobbiesMatching;
+            for (int i = 0; i < count; i++)
+            {
+                var lobby = SteamMatchmaking.GetLobbyByIndex(i);
+                if (lobby.m_SteamID == 0UL)
+                    continue;
+
+                var code = NormalizeLobbyCode(SteamMatchmaking.GetLobbyData(lobby, LobbyCodeLobbyKey));
+                if (!string.Equals(code, normalizedCode, StringComparison.Ordinal))
+                    continue;
+
+                lobbyId = lobby.m_SteamID;
+                return true;
+            }
+
+            error = "Steam lobby code does not exist";
+            return false;
         }
 
         private static bool TryWaitForCallResult<T>(

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.2</Version>
+    <Version>0.2.0</Version>
     <ModType>mod</ModType>
     <ModMain>DeadCellsMultiplayerMod.ModEntry</ModMain>
     <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
@@ -20,8 +20,9 @@
     <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.3" />
     <Reference Include="Steamworks.NET" Condition="Exists('$(SteamworksNetHintPath)')">
       <HintPath>$(SteamworksNetHintPath)</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
+    <OutputFiles Include="$(SteamworksNetHintPath)" Condition="Exists('$(SteamworksNetHintPath)')" />
   </ItemGroup>
 
   <PropertyGroup>
