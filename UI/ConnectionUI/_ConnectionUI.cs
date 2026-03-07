@@ -23,22 +23,23 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             if (!net.TryGetRemoteUserSnapshots(out var snapshots))
                 snapshots = new List<NetNode.RemoteUserSnapshot>();
 
+            var isHost = net.IsHost;
             var localId = net.id;
             const int hostId = 1;
 
-            if (!net.HasRemote && !net.IsHost)
+            if (!net.HasRemote && !isHost)
             {
                 playerNames.Add("connecting...");
                 return playerNames;
             }
 
-            string? hostName = null;
-            if (localId == hostId)
+            if (isHost)
             {
-                hostName = localName;
+                playerNames.Add(localName + " (Host) (you)");
             }
             else
             {
+                string? hostName = null;
                 for (int i = 0; i < snapshots.Count; i++)
                 {
                     var remote = snapshots[i];
@@ -48,21 +49,24 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
                         break;
                     }
                 }
-            }
 
-            if (!string.IsNullOrWhiteSpace(hostName))
-            {
-                var hostSuffix = localId == hostId ? " (Host) (you)" : " (Host)";
-                playerNames.Add(hostName + hostSuffix);
-            }
-
-            if (localId != hostId)
+                if (string.IsNullOrWhiteSpace(hostName))
+                {
+                    var fallbackHost = GameMenu.RemoteUsername;
+                    hostName = string.IsNullOrWhiteSpace(fallbackHost) ? "Host" : fallbackHost.Trim();
+                }
+                playerNames.Add(hostName + " (Host)");
                 playerNames.Add(localName + " (you)");
+            }
 
             for (int i = 0; i < snapshots.Count; i++)
             {
                 var remote = snapshots[i];
-                if (remote.Id == hostId || remote.Id == localId)
+                if (remote.Id == hostId)
+                    continue;
+                if (!isHost && remote.Id == localId)
+                    continue;
+                if (isHost && localId > 0 && remote.Id == localId)
                     continue;
 
                 string displayName = GetPlayerName(localId, remote.Id, remote.Username ?? string.Empty);

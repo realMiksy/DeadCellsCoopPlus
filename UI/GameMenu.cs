@@ -1137,12 +1137,8 @@ namespace DeadCellsMultiplayerMod
                                 () => ShowJoinTransportMenu(screen));
                             return;
                         }
-                        ModEntry.Instance.StartSteamClientFromMenu(_steamHostSteamId);
                     }
-                    else
-                    {
-                        ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
-                    }
+
                     lock (Sync)
                     {
                         _levelDescArrived = false;
@@ -1153,6 +1149,11 @@ namespace DeadCellsMultiplayerMod
                         _clientConnecting = true;
                         _waitingForHost = true;
                     }
+
+                    if (_menuTransport == ConnectionTransport.Steam)
+                        ModEntry.Instance.StartSteamClientFromMenu(_steamHostSteamId);
+                    else
+                        ModEntry.Instance.StartClientFromMenu(_mpIp, _mpPort);
                 }
             }
             catch (Exception ex)

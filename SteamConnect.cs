@@ -1201,6 +1201,11 @@ namespace DeadCellsMultiplayerMod
             return "127.0.0.1";
         }
 
+        internal static void PrepareSteamNativePathForRuntime()
+        {
+            PrepareSteamNativePath();
+        }
+
         private static void PrepareSteamNativePath()
         {
             var steamApiName = Environment.Is64BitProcess ? "steam_api64.dll" : "steam_api.dll";
