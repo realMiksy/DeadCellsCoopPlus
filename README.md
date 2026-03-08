@@ -52,8 +52,8 @@ This method will automatically install and keep DCCM up to date.
 
 ---
 
-### 🔹 Non-Steam version
-
+### 🔹 ~~Non-Steam version~~
+## DCCM works only on Steam currently!
 If you are using a **non-Steam version** of Dead Cells:
 
 1. Download the latest release of **DCCM** from the official repository:
