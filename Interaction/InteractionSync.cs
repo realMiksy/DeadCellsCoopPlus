@@ -27,6 +27,7 @@ public class InteractionSync :
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
+    private bool _applyingRemoteDoorEvents;
 
     public InteractionSync(ModEntry entry)
     {
@@ -99,6 +100,8 @@ public class InteractionSync :
 
     private void TrySendDoorEvent(Door self, string action)
     {
+        if (_applyingRemoteDoorEvents)
+            return;
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.id <= 0)
             return;
@@ -297,19 +300,22 @@ public class InteractionSync :
         if (level?.entities == null || events == null)
             return;
 
-        var localId = GameMenu.NetRef?.id ?? 0;
-        foreach (var ev in events)
+        _applyingRemoteDoorEvents = true;
+        try
         {
-            if (ev.UserId == localId)
-                continue;
-
-            var door = FindDoorByPos(level, ev.X, ev.Y);
-            if (door == null)
-                continue;
-
-            try
+            var localId = GameMenu.NetRef?.id ?? 0;
+            foreach (var ev in events)
             {
-                switch (ev.Action)
+                if (ev.UserId == localId)
+                    continue;
+
+                var door = FindDoorByPos(level, ev.X, ev.Y);
+                if (door == null)
+                    continue;
+
+                try
+                {
+                    switch (ev.Action)
                 {
                     case "open":
                         door.open(300, null, null);
@@ -325,21 +331,32 @@ public class InteractionSync :
                         if (ev.Broken)
                         {
                             _openedDoors.Remove(door);
-                            door.life = 0;
-                            door.onDie();
+                            if (!SafeRead(() => door.broken, false))
+                            {
+                                door.life = 0;
+                                door.onDie();
+                            }
                         }
                         break;
                     case "die":
                         _openedDoors.Remove(door);
-                        door.life = 0;
-                        door.onDie();
+                        if (!SafeRead(() => door.broken, false))
+                        {
+                            door.life = 0;
+                            door.onDie();
+                        }
                         break;
                 }
             }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "[InteractionSync] Apply door event failed x={X} y={Y} action={Action}", ev.X, ev.Y, ev.Action);
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply door event failed x={X} y={Y} action={Action}", ev.X, ev.Y, ev.Action);
+                }
             }
+        }
+        finally
+        {
+            _applyingRemoteDoorEvents = false;
         }
     }
 
