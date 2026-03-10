@@ -439,7 +439,6 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
             // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
-            Hook__TitleScreen.__constructor__ += Hook_TitleScreen__constructor__;
             // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
         }
@@ -711,14 +710,6 @@ namespace DeadCellsMultiplayerMod
         }
 
 
-        private void Hook_TitleScreen__constructor__(Hook__TitleScreen.orig___constructor__ orig, TitleScreen playMusic, bool? titleLib)
-        {
-            orig(playMusic, titleLib);
-            ConnectionUI connectionUI = new ConnectionUI(playMusic);
-            playMusic.addChild(connectionUI);
-            connectionUI.root.set_visible(false);
-
-        }
 
         private void Hook_Game_pause(Hook_Game.orig_pause orig, dc.pr.Game self)
         {

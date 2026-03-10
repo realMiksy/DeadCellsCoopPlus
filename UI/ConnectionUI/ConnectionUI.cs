@@ -541,6 +541,19 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             entry.Logger.Information("\x1b[32m[[ModEntry.ConnectionUI] Initializing ConnectionUI...]\x1b[0m ");
         }
 
+        /// <summary>
+        /// Ensures ConnectionUI exists on the given TitleScreen. Called from mainMenu hook
+        /// to avoid Hashlink marshaling crash in TitleScreen constructor (bool? titleLib).
+        /// </summary>
+        public static void EnsureCreated(TitleScreen screen)
+        {
+            if (Instance != null)
+                return;
+            var connectionUI = new ConnectionUI(screen);
+            screen.addChild(connectionUI);
+            connectionUI.root.set_visible(false);
+        }
+
 
 
     }

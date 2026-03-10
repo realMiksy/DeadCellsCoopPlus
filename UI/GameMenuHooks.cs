@@ -9,6 +9,7 @@ using ModCore.Utilities;
 using ModCore.Modules;
 using Serilog;
 using DeadCellsMultiplayerMod.UI;
+using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 
 namespace DeadCellsMultiplayerMod
 {
@@ -41,6 +42,7 @@ namespace DeadCellsMultiplayerMod
             TryDisconnectWhenReturningToMainMenu();
             StoreTitleScreen(self);
             _mainMenuButtonAdded = false;
+            ConnectionUI.EnsureCreated(self);
             orig(self);
 
             EnsureMainMenuMultiplayerButton(self);

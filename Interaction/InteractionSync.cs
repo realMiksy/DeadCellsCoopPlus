@@ -24,6 +24,7 @@ public class InteractionSync :
 {
     private const double PosTolerance = 1.0;
     private const double PlatePosTolerance = 8.0;
+    private const double ChestPosTolerance = 16.0;
     private const double DoorProximityRadiusPx = 100.0;
 
     private readonly ILogger _log;
@@ -48,7 +49,7 @@ public class InteractionSync :
         Hook_Door.onDie += Hook_Door_onDie;
         Hook_Elevator.onStep += Hook_Elevator_onStep;
         Hook_PressurePlate.trigger += Hook_PressurePlate_trigger;
-        Hook_PressurePlate.executeOn += Hook_PressurePlate_executeOn;
+        // Don't hook executeOn - it fires every frame when standing, causing infinite event flood
         Hook_TreasureChest.open += Hook_TreasureChest_open;
     }
 
@@ -94,8 +95,7 @@ public class InteractionSync :
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.id <= 0)
             return;
-        if (!net.IsHost)
-            return;
+        // Both host and clients send door events when they open/close/damage/die
 
         try
         {
@@ -132,14 +132,6 @@ public class InteractionSync :
     {
         orig(self, by);
         TrySendPressurePlateEvent(self);
-    }
-
-    private bool Hook_PressurePlate_executeOn(Hook_PressurePlate.orig_executeOn orig, PressurePlate self, Entity by, Entity noLoopEntity, Ref<bool> noLoopRef)
-    {
-        var result = orig(self, by, noLoopEntity, noLoopRef);
-        if (result)
-            TrySendPressurePlateEvent(self);
-        return result;
     }
 
     private void TrySendPressurePlateEvent(PressurePlate self)
@@ -485,7 +477,36 @@ public class InteractionSync :
 
     private static TreasureChest? FindTreasureChestByPos(Level level, double x, double y)
     {
-        return FindInteractByPos<TreasureChest>(level, x, y);
+        var byPos = FindInteractByPos<TreasureChest>(level, x, y, ChestPosTolerance);
+        if (byPos != null)
+            return byPos;
+        // Fallback: find nearest TreasureChest (positions can differ between host/client)
+        return FindNearestTreasureChest(level, x, y);
+    }
+
+    private static TreasureChest? FindNearestTreasureChest(Level level, double x, double y)
+    {
+        if (level?.entities == null) return null;
+        TreasureChest? nearest = null;
+        double nearestSq = ChestPosTolerance * ChestPosTolerance * 4; // ~32px radius
+        for (var i = 0; i < level.entities.length; i++)
+        {
+            var e = level.entities.getDyn(i) as TreasureChest;
+            if (e?.spr == null) continue;
+            try
+            {
+                var dx = e.spr.x - x;
+                var dy = e.spr.y - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestSq)
+                {
+                    nearestSq = dSq;
+                    nearest = e;
+                }
+            }
+            catch { }
+        }
+        return nearest;
     }
 
     private static T? FindInteractByPos<T>(Level level, double x, double y, double tolerance = PosTolerance) where T : Entity
