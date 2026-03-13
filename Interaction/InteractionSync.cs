@@ -7,13 +7,12 @@ using dc.hl.types;
 using dc.pr;
 using Hashlink.Virtuals;
 using dc.tool.atk;
-using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
+using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
 using ModCore.Utilities;
 using Serilog;
-using HaxeProxy.Runtime;
 
 namespace DeadCellsMultiplayerMod.Interaction;
 
@@ -27,6 +26,8 @@ public class InteractionSync :
     private const double ChestPosTolerance = 16.0;
     private const double DoorPosTolerance = 16.0;
     private const double DoorProximityRadiusPx = 100.0;
+    private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
+    private const int DoorCloseDelayMs = 1000;
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
@@ -99,15 +100,13 @@ public class InteractionSync :
         if (_applyingRemoteDoorEvents)
             return;
         var net = GameMenu.NetRef;
-        if (net == null || !net.IsAlive || net.id <= 0)
+        if (!IsNetReadyForSend(net))
             return;
-        // Both host and clients send door events when they open/close/damage/die
-
         try
         {
             var (x, y) = GetEntityPixelPos(self);
             var broken = action == "die" || SafeRead(() => self.broken, false);
-            net.SendInterDoor(net.id, x, y, action, broken);
+            net!.SendInterDoor(net.id, x, y, action, broken);
         }
         catch (Exception ex)
         {
@@ -118,20 +117,7 @@ public class InteractionSync :
     private void Hook_Elevator_onStep(Hook_Elevator.orig_onStep orig, Elevator self)
     {
         orig(self);
-
-        var net = GameMenu.NetRef;
-        if (net == null || !net.IsAlive || net.id <= 0)
-            return;
-
-        try
-        {
-            var (x, y) = GetEntityPixelPos(self);
-            net.SendInterElevator(x, y);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "[InteractionSync] Elevator send failed");
-        }
+        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterElevator(x, y), "Elevator");
     }
 
     private void Hook_PressurePlate_trigger(Hook_PressurePlate.orig_trigger orig, PressurePlate self, Entity by)
@@ -144,19 +130,7 @@ public class InteractionSync :
     {
         if (_applyingRemotePressurePlateEvents)
             return;
-        var net = GameMenu.NetRef;
-        if (net == null || !net.IsAlive || net.id <= 0)
-            return;
-
-        try
-        {
-            var (x, y) = GetEntityPixelPos(self);
-            net.SendInterPressurePlate(x, y);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "[InteractionSync] PressurePlate send failed");
-        }
+        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterPressurePlate(x, y), "PressurePlate");
     }
 
     private void Hook_TreasureChest_open(Hook_TreasureChest.orig_open orig, TreasureChest self, Hero by)
@@ -168,19 +142,7 @@ public class InteractionSync :
 
     private void TrySendTreasureChestEvent(TreasureChest self)
     {
-        var net = GameMenu.NetRef;
-        if (net == null || !net.IsAlive || net.id <= 0)
-            return;
-
-        try
-        {
-            var (x, y) = GetEntityPixelPos(self);
-            net.SendInterTreasureChest(x, y);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "[InteractionSync] TreasureChest send failed");
-        }
+        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterTreasureChest(x, y), "TreasureChest");
     }
 
     private static (double x, double y) GetEntityPixelPos(Entity e)
@@ -201,6 +163,26 @@ public class InteractionSync :
     {
         try { return fn(); }
         catch { return fallback; }
+    }
+
+    private static bool IsNetReadyForSend(NetNode? net) =>
+        net != null && net.IsAlive && net.id > 0;
+
+    private bool TrySendInteractEvent(Entity entity, Action<double, double> send, string logContext)
+    {
+        if (!IsNetReadyForSend(GameMenu.NetRef))
+            return false;
+        try
+        {
+            var (x, y) = GetEntityPixelPos(entity);
+            send(x, y);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] {LogContext} send failed", logContext);
+            return false;
+        }
     }
 
     void IOnHeroUpdate.OnHeroUpdate(double dt)
@@ -258,16 +240,13 @@ public class InteractionSync :
                 var (doorX, doorY) = GetEntityPixelPos(door);
                 if (IsAnyPlayerNearby(level, doorX, doorY))
                     continue;
-
-                if (!_openedDoors.Contains(door))
-                    continue;
                 if (SafeRead(() => door.broken, false))
                     continue;
 
                 _openedDoors.Remove(door);
                 try
                 {
-                    int delayMs = 1000;
+                    int delayMs = DoorCloseDelayMs;
                     door.close(Ref<int>.From(ref delayMs));
                 }
                 catch (Exception ex)
@@ -290,8 +269,6 @@ public class InteractionSync :
 
     private static bool IsAnyPlayerNearby(Level level, double doorX, double doorY)
     {
-        var radiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
-
         var hero = ModEntry.me;
         if (hero != null && ReferenceEquals(hero._level, level))
         {
@@ -300,7 +277,7 @@ public class InteractionSync :
                 var (hx, hy) = GetEntityPixelPos(hero);
                 var dx = hx - doorX;
                 var dy = hy - doorY;
-                if (dx * dx + dy * dy <= radiusSq)
+                if (dx * dx + dy * dy <= DoorProximityRadiusSq)
                     return true;
             }
         }
@@ -318,17 +295,27 @@ public class InteractionSync :
             var (cx, cy) = GetEntityPixelPos(client);
             var dx = cx - doorX;
             var dy = cy - doorY;
-            if (dx * dx + dy * dy <= radiusSq)
+            if (dx * dx + dy * dy <= DoorProximityRadiusSq)
                 return true;
         }
 
         return false;
     }
 
+    private void ApplyDoorDie(Door door)
+    {
+        _openedDoors.Remove(door);
+        if (!SafeRead(() => door.broken, false))
+        {
+            door.life = 0;
+            door.onDie();
+        }
+    }
+
     private void ApplyRemoteDoorEvents(List<InterDoorEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null)
+        if (level?.entities == null || events == null || events.Count == 0)
             return;
 
         _applyingRemoteDoorEvents = true;
@@ -347,45 +334,33 @@ public class InteractionSync :
                 try
                 {
                     switch (ev.Action)
-                {
-                    case "open":
-                        door.open(300, null, null);
-                        break;
-                    case "close":
-                        if (SafeRead(() => door.broken, false))
+                    {
+                        case "open":
+                            door.open(300, null, null);
                             break;
-                        _openedDoors.Remove(door);
-                        try
-                        {
-                            int delayMs = 1000;
-                            door.close(Ref<int>.From(ref delayMs));
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.Warning(ex, "[InteractionSync] close failed (door may be broken)");
-                        }
-                        break;
-                    case "damage":
-                        if (ev.Broken)
-                        {
+                        case "close":
+                            if (SafeRead(() => door.broken, false))
+                                break;
                             _openedDoors.Remove(door);
-                            if (!SafeRead(() => door.broken, false))
+                            try
                             {
-                                door.life = 0;
-                                door.onDie();
+                                int delayMs = DoorCloseDelayMs;
+                                door.close(Ref<int>.From(ref delayMs));
                             }
-                        }
-                        break;
-                    case "die":
-                        _openedDoors.Remove(door);
-                        if (!SafeRead(() => door.broken, false))
-                        {
-                            door.life = 0;
-                            door.onDie();
-                        }
-                        break;
+                            catch (Exception ex)
+                            {
+                                _log.Warning(ex, "[InteractionSync] close failed (door may be broken)");
+                            }
+                            break;
+                        case "damage":
+                            if (ev.Broken)
+                                ApplyDoorDie(door);
+                            break;
+                        case "die":
+                            ApplyDoorDie(door);
+                            break;
+                    }
                 }
-            }
                 catch (Exception ex)
                 {
                     _log.Warning(ex, "[InteractionSync] Apply door event failed x={X} y={Y} action={Action}", ev.X, ev.Y, ev.Action);
@@ -401,7 +376,7 @@ public class InteractionSync :
     private void ApplyRemoteElevatorEvents(List<InterElevatorEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null)
+        if (level?.entities == null || events == null || events.Count == 0)
             return;
 
         foreach (var ev in events)
@@ -424,7 +399,7 @@ public class InteractionSync :
     private void ApplyRemotePressurePlateEvents(List<InterPressurePlateEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null)
+        if (level?.entities == null || events == null || events.Count == 0)
             return;
 
         var localHero = ModEntry.me as Entity;
@@ -464,14 +439,14 @@ public class InteractionSync :
         return FindNearestDoor(level, x, y);
     }
 
-    private static Door? FindNearestDoor(Level level, double x, double y)
+    private static T? FindNearestByPos<T>(Level level, double x, double y, double maxDistSq) where T : Entity
     {
         if (level?.entities == null) return null;
-        Door? nearest = null;
-        double nearestSq = DoorPosTolerance * DoorPosTolerance * 4;
+        T? nearest = null;
+        double nearestSq = maxDistSq;
         for (var i = 0; i < level.entities.length; i++)
         {
-            var e = level.entities.getDyn(i) as Door;
+            var e = level.entities.getDyn(i) as T;
             if (e?.spr == null) continue;
             try
             {
@@ -489,6 +464,9 @@ public class InteractionSync :
         return nearest;
     }
 
+    private static Door? FindNearestDoor(Level level, double x, double y) =>
+        FindNearestByPos<Door>(level, x, y, DoorPosTolerance * DoorPosTolerance * 4);
+
     private static Elevator? FindElevatorByPos(Level level, double x, double y)
     {
         return FindInteractByPos<Elevator>(level, x, y);
@@ -502,7 +480,7 @@ public class InteractionSync :
     private void ApplyRemoteTreasureChestEvents(List<InterTreasureChestEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null)
+        if (level?.entities == null || events == null || events.Count == 0)
             return;
 
         var localHero = ModEntry.me;
@@ -539,34 +517,11 @@ public class InteractionSync :
         var byPos = FindInteractByPos<TreasureChest>(level, x, y, ChestPosTolerance);
         if (byPos != null)
             return byPos;
-        // Fallback: find nearest TreasureChest (positions can differ between host/client)
         return FindNearestTreasureChest(level, x, y);
     }
 
-    private static TreasureChest? FindNearestTreasureChest(Level level, double x, double y)
-    {
-        if (level?.entities == null) return null;
-        TreasureChest? nearest = null;
-        double nearestSq = ChestPosTolerance * ChestPosTolerance * 4; // ~32px radius
-        for (var i = 0; i < level.entities.length; i++)
-        {
-            var e = level.entities.getDyn(i) as TreasureChest;
-            if (e?.spr == null) continue;
-            try
-            {
-                var dx = e.spr.x - x;
-                var dy = e.spr.y - y;
-                var dSq = dx * dx + dy * dy;
-                if (dSq < nearestSq)
-                {
-                    nearestSq = dSq;
-                    nearest = e;
-                }
-            }
-            catch { }
-        }
-        return nearest;
-    }
+    private static TreasureChest? FindNearestTreasureChest(Level level, double x, double y) =>
+        FindNearestByPos<TreasureChest>(level, x, y, ChestPosTolerance * ChestPosTolerance * 4);
 
     private static T? FindInteractByPos<T>(Level level, double x, double y, double tolerance = PosTolerance) where T : Entity
     {
