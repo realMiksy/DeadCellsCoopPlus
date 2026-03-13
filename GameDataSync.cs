@@ -131,8 +131,6 @@ namespace DeadCellsMultiplayerMod
             }
             else if (net != null)
             {
-                if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
-                    ReceiveBlueprints(_remoteBlueprintsPayload, self);
                 if (GameMenu.TryGetRemoteSeed(out var remoteSeed))
                 {
                     Seed = remoteSeed;
@@ -163,8 +161,13 @@ namespace DeadCellsMultiplayerMod
 
             if (net != null && net.IsHost)
                 SendHostStorySync(self, net);
-            else if (net != null && !string.IsNullOrEmpty(_remoteCountersPayload))
-                ReceiveCounters(_remoteCountersPayload, self);
+            else if (net != null)
+            {
+                if (!string.IsNullOrEmpty(_remoteBlueprintsPayload))
+                    ReceiveBlueprints(_remoteBlueprintsPayload, self);
+                if (!string.IsNullOrEmpty(_remoteCountersPayload))
+                    ReceiveCounters(_remoteCountersPayload, self);
+            }
         }
 
         public static void ReceiveBlueprints(string payload, User? target = null)
@@ -259,27 +262,9 @@ namespace DeadCellsMultiplayerMod
             if (target != null)
             {
                 apply(target);
-                return;
             }
-
-            GameMenu.EnqueueMainThread(() =>
-            {
-                try
-                {
-                    var main = dc.Main.Class.ME;
-                    var user = main?.user;
-                    if (user != null)
-                    {
-                        apply(user);
-                        var net = GameMenu.NetRef;
-                        if (net != null && net.IsAlive && net.IsHost)
-                            SendBlueprints(user, net);
-                    }
-                }
-                catch
-                {
-                }
-            });
+            // When target is null (e.g. from network), only store payload.
+            // Apply happens when user_hook_new_game or RestoreRemoteUserData runs with target.
         }
 
         public static void SendBlueprints(User user, NetNode? net)

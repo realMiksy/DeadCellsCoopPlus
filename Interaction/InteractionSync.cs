@@ -25,12 +25,15 @@ public class InteractionSync :
     private const double PosTolerance = 1.0;
     private const double PlatePosTolerance = 8.0;
     private const double ChestPosTolerance = 16.0;
+    private const double DoorPosTolerance = 16.0;
     private const double DoorProximityRadiusPx = 100.0;
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
+    private readonly Dictionary<Door, bool> _doorHadAutoClose = new();
     private bool _applyingRemoteDoorEvents;
     private bool _applyingRemoteChestEvents;
+    private bool _applyingRemotePressurePlateEvents;
 
     public InteractionSync(ModEntry entry)
     {
@@ -58,7 +61,10 @@ public class InteractionSync :
         orig(self);
         var net = GameMenu.NetRef;
         if (net != null && net.IsAlive)
+        {
+            _doorHadAutoClose[self] = SafeRead(() => self.autoClose, false);
             self.autoClose = false;
+        }
     }
 
     private void Hook_Door_open(Hook_Door.orig_open orig, Door self, int durationMs, int? finalRatio, double? _tween)
@@ -136,6 +142,8 @@ public class InteractionSync :
 
     private void TrySendPressurePlateEvent(PressurePlate self)
     {
+        if (_applyingRemotePressurePlateEvents)
+            return;
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive || net.id <= 0)
             return;
@@ -242,6 +250,8 @@ public class InteractionSync :
                     toRemove.Add(door!);
                     continue;
                 }
+                if (!_doorHadAutoClose.TryGetValue(door, out var hadAutoClose) || !hadAutoClose)
+                    continue;
                 if (!ReferenceEquals(door._level, level))
                     continue;
 
@@ -251,10 +261,19 @@ public class InteractionSync :
 
                 if (!_openedDoors.Contains(door))
                     continue;
+                if (SafeRead(() => door.broken, false))
+                    continue;
 
                 _openedDoors.Remove(door);
-                int delayMs = 2000;
-                door.close(Ref<int>.From(ref delayMs));
+                try
+                {
+                    int delayMs = 1000;
+                    door.close(Ref<int>.From(ref delayMs));
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] closeFast failed (door may be broken)");
+                }
             }
             catch (Exception ex)
             {
@@ -333,11 +352,18 @@ public class InteractionSync :
                         door.open(300, null, null);
                         break;
                     case "close":
-                        if (!_openedDoors.Contains(door))
+                        if (SafeRead(() => door.broken, false))
                             break;
                         _openedDoors.Remove(door);
-                        int delayMs = 2000;
-                        door.close(Ref<int>.From(ref delayMs));
+                        try
+                        {
+                            int delayMs = 1000;
+                            door.close(Ref<int>.From(ref delayMs));
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.Warning(ex, "[InteractionSync] close failed (door may be broken)");
+                        }
                         break;
                     case "damage":
                         if (ev.Broken)
@@ -405,29 +431,62 @@ public class InteractionSync :
         if (localHero == null)
             return;
 
-        foreach (var ev in events)
+        _applyingRemotePressurePlateEvents = true;
+        try
         {
-            var plate = FindPressurePlateByPos(level, ev.X, ev.Y);
-            if (plate == null)
-                continue;
+            foreach (var ev in events)
+            {
+                var plate = FindPressurePlateByPos(level, ev.X, ev.Y);
+                if (plate == null)
+                    continue;
 
-            try
-            {
-                plate.trigger(localHero);
-                bool noLoop = false;
-                var noLoopRef = Ref<bool>.From(ref noLoop);
-                plate.executeOn(localHero, null, noLoopRef);
+                try
+                {
+                    plate.trigger(localHero);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply pressure plate event failed x={X} y={Y}", ev.X, ev.Y);
+                }
             }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "[InteractionSync] Apply pressure plate event failed x={X} y={Y}", ev.X, ev.Y);
-            }
+        }
+        finally
+        {
+            _applyingRemotePressurePlateEvents = false;
         }
     }
 
     private static Door? FindDoorByPos(Level level, double x, double y)
     {
-        return FindInteractByPos<Door>(level, x, y);
+        var byPos = FindInteractByPos<Door>(level, x, y, DoorPosTolerance);
+        if (byPos != null)
+            return byPos;
+        return FindNearestDoor(level, x, y);
+    }
+
+    private static Door? FindNearestDoor(Level level, double x, double y)
+    {
+        if (level?.entities == null) return null;
+        Door? nearest = null;
+        double nearestSq = DoorPosTolerance * DoorPosTolerance * 4;
+        for (var i = 0; i < level.entities.length; i++)
+        {
+            var e = level.entities.getDyn(i) as Door;
+            if (e?.spr == null) continue;
+            try
+            {
+                var dx = e.spr.x - x;
+                var dy = e.spr.y - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestSq)
+                {
+                    nearestSq = dSq;
+                    nearest = e;
+                }
+            }
+            catch { }
+        }
+        return nearest;
     }
 
     private static Elevator? FindElevatorByPos(Level level, double x, double y)
