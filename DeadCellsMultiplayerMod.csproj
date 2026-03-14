@@ -10,9 +10,8 @@
     <AutoInstallMod Condition="'$(Configuration)' == 'Debug'">true</AutoInstallMod>
 
     <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
-    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(_DCCM_MDK_Root)' != ''">$(_DCCM_MDK_Root)\tools\Steamworks.NET.dll</SteamworksNetHintPath>
-    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DCCM_ROOT)' != ''">$(DCCM_ROOT)\core\mdk\tools\Steamworks.NET.dll</SteamworksNetHintPath>
-    <SteamworksNetHintPath Condition="'$(SteamworksNetHintPath)' == '' and '$(DEAD_CELLS_GAME_PATH)' != ''">$(DEAD_CELLS_GAME_PATH)\coremod\core\mdk\tools\Steamworks.NET.dll</SteamworksNetHintPath>
+
+    <SteamApi64HintPath Condition="'$(SteamApi64HintPath)' == '' and '$(DCCM_MDK_ROOT)' != ''">$(DCCM_MDK_ROOT)\..\native\win-x64\steam_api64.dll</SteamApi64HintPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,9 +21,18 @@
       <HintPath>$(SteamworksNetHintPath)</HintPath>
       <Private>true</Private>
     </Reference>
-    <OutputFiles Include="$(SteamworksNetHintPath)" Condition="Exists('$(SteamworksNetHintPath)')" />
+    <None Include="$(SteamApi64HintPath)" Condition="Exists('$(SteamApi64HintPath)')" Link="steam_api64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+      <TargetPath>steam_api64.dll</TargetPath>
+    </None>
   </ItemGroup>
-
+  <Target Name="CopySteamApi64" AfterTargets="CopyOutputFiles" Condition="Exists('$(SteamApi64HintPath)')">
+    <PropertyGroup>
+      <_ModOutputDir>$(OutputPath)output\$(AssemblyName)\</_ModOutputDir>
+    </PropertyGroup>
+    <Copy SourceFiles="$(SteamApi64HintPath)" DestinationFolder="$(_ModOutputDir)" SkipUnchangedFiles="true" />
+  </Target>
   <PropertyGroup>
     <GenerateSinglePakFile>true</GenerateSinglePakFile>
   </PropertyGroup>
@@ -32,11 +40,5 @@
   <ItemGroup>
     <PackAssets Include="Resourcefile\**\*" RootInPak="DeadCellsMultiplayerModLang" />
   </ItemGroup>
-
-  <Target Name="EnsureSteamworksReference" BeforeTargets="ResolveAssemblyReferences">
-    <Error
-      Condition="!Exists('$(SteamworksNetHintPath)')"
-      Text="Steamworks.NET.dll not found. Set DCCM_MDK_ROOT (or SteamworksNetHintPath) to your DCCM MDK path." />
-  </Target>
 
 </Project>
