@@ -26,9 +26,10 @@ public class InteractionSync :
     private const double ChestPosTolerance = 16.0;
     private const double DoorPosTolerance = 16.0;
     private const double TeleportPosTolerance = 48.0;
+    private const double BreakableGroundPosTolerance = 24.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
-    private const int DoorCloseDelayMs = 1000;
+    private const int DoorCloseDelayMs = 500;
 
     private readonly ILogger _log;
     private readonly HashSet<Door> _openedDoors = new();
@@ -38,6 +39,7 @@ public class InteractionSync :
     private bool _applyingRemotePressurePlateEvents;
     private bool _applyingRemoteVineLadderEvents;
     private bool _applyingRemoteTeleportEvents;
+    private bool _applyingRemoteBreakableGroundEvents;
 
     public InteractionSync(ModEntry entry)
     {
@@ -60,6 +62,7 @@ public class InteractionSync :
         Hook_TreasureChest.open += Hook_TreasureChest_open;
         Hook_VineLadder.activate += Hook_VineLadder_activate;
         Hook_Teleport.open += Hook_Teleport_open;
+        Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
     }
 
     private void Hook_Door_init(Hook_Door.orig_init orig, Door self)
@@ -169,6 +172,24 @@ public class InteractionSync :
         TrySendTeleportEvent(self);
     }
 
+    private void Hook_Hero_breakBreakableGround(Hook_Hero.orig_breakBreakableGround orig, Hero self, int x, int y)
+    {
+        orig(self, x, y);
+        if (_applyingRemoteBreakableGroundEvents)
+            return;
+        var net = GameMenu.NetRef;
+        if (!IsNetReadyForSend(net) || ModEntry.me == null || !ReferenceEquals(self, ModEntry.me))
+            return;
+        try
+        {
+            net!.SendInterBreakableGround(x, y);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] BreakableGround send failed");
+        }
+    }
+
     private void TrySendTeleportEvent(Teleport self)
     {
         if (_applyingRemoteTeleportEvents)
@@ -254,6 +275,10 @@ public class InteractionSync :
 
         if (net.IsHost)
             CheckAndCloseDoorsWhenNoOneNearby();
+        if (net.TryConsumeInterBreakableGroundEvents(out var breakableGroundEvents))
+        {
+            ApplyRemoteBreakableGroundEvents(breakableGroundEvents);
+        }
     }
 
     private void CheckAndCloseDoorsWhenNoOneNearby()
@@ -498,6 +523,50 @@ public class InteractionSync :
         finally
         {
             _applyingRemoteTeleportEvents = false;
+        }
+    }
+
+    private void ApplyRemoteBreakableGroundEvents(List<InterBreakableGroundEvent> events)
+    {
+        var hero = ModEntry.me;
+        if (hero == null || events == null || events.Count == 0)
+            return;
+
+        _applyingRemoteBreakableGroundEvents = true;
+        try
+        {
+            var applied = new List<(double, double)>();
+            foreach (var ev in events)
+            {
+                var alreadyNearby = false;
+                foreach (var (ax, ay) in applied)
+                {
+                    if (System.Math.Abs(ax - ev.X) <= BreakableGroundPosTolerance && System.Math.Abs(ay - ev.Y) <= BreakableGroundPosTolerance)
+                    {
+                        alreadyNearby = true;
+                        break;
+                    }
+                }
+                if (alreadyNearby)
+                    continue;
+
+                var cx = (int)System.Math.Round(ev.X);
+                var cy = (int)System.Math.Round(ev.Y);
+                applied.Add((ev.X, ev.Y));
+
+                try
+                {
+                    hero.breakBreakableGround(cx, cy);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply breakable ground failed x={X} y={Y}", cx, cy);
+                }
+            }
+        }
+        finally
+        {
+            _applyingRemoteBreakableGroundEvents = false;
         }
     }
 

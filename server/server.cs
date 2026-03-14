@@ -531,6 +531,7 @@ public sealed partial class NetNode : IDisposable
     private readonly List<InterTreasureChestEvent> _pendingInterTreasureChestEvents = new();
     private readonly List<InterVineLadderEvent> _pendingInterVineLadderEvents = new();
     private readonly List<InterTeleportEvent> _pendingInterTeleportEvents = new();
+    private readonly List<InterBreakableGroundEvent> _pendingInterBreakableGroundEvents = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1818,6 +1819,23 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("INTERBREAK|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["INTERBREAK|".Length..];
+            if (TryParseInterBreakableGroundPayload(payload, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingInterBreakableGroundEvents.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = $"INTERBREAK|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}\n";
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["MOBEVENT|".Length..];
@@ -2017,6 +2035,7 @@ public sealed partial class NetNode : IDisposable
             _pendingInterTreasureChestEvents.Clear();
             _pendingInterVineLadderEvents.Clear();
             _pendingInterTeleportEvents.Clear();
+            _pendingInterBreakableGroundEvents.Clear();
         }
         if (_useSteamTransport)
         {
@@ -2874,6 +2893,25 @@ public sealed partial class NetNode : IDisposable
             return false;
 
         ev = new InterTeleportEvent(x, y);
+        return true;
+    }
+
+    private static bool TryParseInterBreakableGroundPayload(string payload, out InterBreakableGroundEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 2)
+            return false;
+
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        ev = new InterBreakableGroundEvent(x, y);
         return true;
     }
 
@@ -4124,6 +4162,16 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"INTERTELEPORT|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
     }
 
+    public void SendInterBreakableGround(double x, double y)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        SendRaw($"INTERBREAK|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -4540,6 +4588,22 @@ public sealed partial class NetNode : IDisposable
 
             events = new List<InterTeleportEvent>(_pendingInterTeleportEvents);
             _pendingInterTeleportEvents.Clear();
+            return events.Count > 0;
+        }
+    }
+
+    public bool TryConsumeInterBreakableGroundEvents(out List<InterBreakableGroundEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingInterBreakableGroundEvents.Count == 0)
+            {
+                events = new List<InterBreakableGroundEvent>();
+                return false;
+            }
+
+            events = new List<InterBreakableGroundEvent>(_pendingInterBreakableGroundEvents);
+            _pendingInterBreakableGroundEvents.Clear();
             return events.Count > 0;
         }
     }

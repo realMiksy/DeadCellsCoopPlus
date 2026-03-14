@@ -77,3 +77,15 @@ public readonly struct InterTeleportEvent
         Y = y;
     }
 }
+
+public readonly struct InterBreakableGroundEvent
+{
+    public readonly double X;
+    public readonly double Y;
+
+    public InterBreakableGroundEvent(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
+}
