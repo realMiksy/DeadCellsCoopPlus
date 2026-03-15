@@ -35,6 +35,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         public string? RemoteHeadSkinId;
         public KingWeaponsManager? kingWeaponsManager;
         private DiveAttack? remoteDiveAttack;
+        private virtual_cooldown_duration_flags_forbiddenItem_props_requiredItem_skill_? remoteDiveSkillInfos;
         private long _lastRemoteDiveStartTicks;
         private long _lastRemoteDiveLandTicks;
 
@@ -121,7 +122,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             if (localHero == null)
                 return;
 
-            var dive = EnsureRemoteDiveAttack(localHero);
+            var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: true);
             if (dive == null)
                 return;
 
@@ -140,7 +141,7 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             if (localHero == null)
                 return;
 
-            var dive = EnsureRemoteDiveAttack(localHero);
+            var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: false);
             if (dive == null)
                 return;
 
@@ -148,6 +149,13 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                 return;
 
             ExecuteRemoteDive(localHero, dive, high, startOnly: false);
+            DisposeRemoteDiveAttack();
+        }
+
+        public void SetRemoteDiveSkillInfos(virtual_cooldown_duration_flags_forbiddenItem_props_requiredItem_skill_? skillInfos)
+        {
+            remoteDiveSkillInfos = CloneDiveSkillInfos(skillInfos);
+            DisposeRemoteDiveAttack();
         }
 
         private static bool IsReplayTooSoon(ref long lastTicks, double minSeconds)
@@ -160,8 +168,11 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             return false;
         }
 
-        private DiveAttack? EnsureRemoteDiveAttack(Hero localHero)
+        private DiveAttack? EnsureRemoteDiveAttack(Hero localHero, bool forceRecreate)
         {
+            if (forceRecreate)
+                DisposeRemoteDiveAttack();
+
             if (remoteDiveAttack != null)
                 return remoteDiveAttack;
 
@@ -176,8 +187,14 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                 if (currentGame == null)
                     return null;
 
-                var created = new DiveAttack(localHero, currentGame, localDive.skillInfos);
-                created.init();
+                var sourceSkillInfos = remoteDiveSkillInfos ?? localDive.skillInfos;
+                var copiedSkillInfos = CloneDiveSkillInfos(sourceSkillInfos) ?? localDive.skillInfos;
+                DiveAttack? created = null;
+                KingWeaponSupport.WithKingContext(localHero, this, () =>
+                {
+                    created = new DiveAttack(localHero, currentGame, copiedSkillInfos);
+                    created.init();
+                });
                 remoteDiveAttack = created;
                 return created;
             }
@@ -347,6 +364,78 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             try { remoteDiveAttack.cancel(); } catch { }
             try { remoteDiveAttack.destroy(); } catch { }
             remoteDiveAttack = null;
+        }
+
+        private static virtual_cooldown_duration_flags_forbiddenItem_props_requiredItem_skill_? CloneDiveSkillInfos(
+            virtual_cooldown_duration_flags_forbiddenItem_props_requiredItem_skill_? source)
+        {
+            if (source == null)
+                return null;
+
+            var clone = new virtual_cooldown_duration_flags_forbiddenItem_props_requiredItem_skill_();
+            SafeAssign(() => clone.cooldown = SafeRead(() => source.cooldown, 0.0));
+            SafeAssign(() => clone.duration = SafeRead(() => source.duration, 0.0));
+            SafeAssign(() => clone.flags = SafeRead(() => source.flags, default(int?)));
+            SafeAssign(() => clone.forbiddenItem = SafeRead(() => source.forbiddenItem, default(dc.String)));
+            SafeAssign(() => clone.requiredItem = SafeRead(() => source.requiredItem, default(dc.String)));
+            SafeAssign(() => clone.skill = SafeRead(() => source.skill, default(dc.String)));
+
+            var sourceProps = SafeRead(() => source.props, default(virtual_affect_alpha_buff_buff2_color_color2_color3_count_duration2_duration3_pct_pct2_pct3_power_power2_power3_radius_radius2_speed_threshold_));
+            SafeAssign(() => clone.props = CloneDiveProps(sourceProps));
+            return clone;
+        }
+
+        private static virtual_affect_alpha_buff_buff2_color_color2_color3_count_duration2_duration3_pct_pct2_pct3_power_power2_power3_radius_radius2_speed_threshold_? CloneDiveProps(
+            virtual_affect_alpha_buff_buff2_color_color2_color3_count_duration2_duration3_pct_pct2_pct3_power_power2_power3_radius_radius2_speed_threshold_? source)
+        {
+            if (source == null)
+                return null;
+
+            var clone = new virtual_affect_alpha_buff_buff2_color_color2_color3_count_duration2_duration3_pct_pct2_pct3_power_power2_power3_radius_radius2_speed_threshold_();
+            SafeAssign(() => clone.affect = SafeRead(() => source.affect, default(double?)));
+            SafeAssign(() => clone.alpha = SafeRead(() => source.alpha, default(double?)));
+            SafeAssign(() => clone.buff = SafeRead(() => source.buff, default(double?)));
+            SafeAssign(() => clone.buff2 = SafeRead(() => source.buff2, default(double?)));
+            SafeAssign(() => clone.color = SafeRead(() => source.color, default(int?)));
+            SafeAssign(() => clone.color2 = SafeRead(() => source.color2, default(int?)));
+            SafeAssign(() => clone.color3 = SafeRead(() => source.color3, default(int?)));
+            SafeAssign(() => clone.count = SafeRead(() => source.count, default(int?)));
+            SafeAssign(() => clone.duration2 = SafeRead(() => source.duration2, default(double?)));
+            SafeAssign(() => clone.duration3 = SafeRead(() => source.duration3, default(double?)));
+            SafeAssign(() => clone.pct = SafeRead(() => source.pct, default(double?)));
+            SafeAssign(() => clone.pct2 = SafeRead(() => source.pct2, default(double?)));
+            SafeAssign(() => clone.pct3 = SafeRead(() => source.pct3, default(double?)));
+            SafeAssign(() => clone.power = SafeRead(() => source.power, default(double?)));
+            SafeAssign(() => clone.power2 = SafeRead(() => source.power2, default(double?)));
+            SafeAssign(() => clone.power3 = SafeRead(() => source.power3, default(double?)));
+            SafeAssign(() => clone.radius = SafeRead(() => source.radius, default(double?)));
+            SafeAssign(() => clone.radius2 = SafeRead(() => source.radius2, default(double?)));
+            SafeAssign(() => clone.speed = SafeRead(() => source.speed, default(double?)));
+            SafeAssign(() => clone.threshold = SafeRead(() => source.threshold, default(double?)));
+            return clone;
+        }
+
+        private static T SafeRead<T>(Func<T> getter, T fallback)
+        {
+            try
+            {
+                return getter();
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        private static void SafeAssign(Action setter)
+        {
+            try
+            {
+                setter();
+            }
+            catch
+            {
+            }
         }
 
         private static string NormalizeBodySkinId(string? skin)

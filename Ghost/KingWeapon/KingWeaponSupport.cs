@@ -18,9 +18,16 @@ internal static class KingWeaponSupport
     private static int _contextDepth;
     [ThreadStatic]
     private static int _allowLocalHeroDamageDepth;
+    [ThreadStatic]
+    private static KingSkin? _currentContextSource;
 
     internal static bool IsInKingContext => _contextDepth > 0;
     internal static bool IsLocalHeroDamageAllowedInKingContext => _allowLocalHeroDamageDepth > 0;
+    internal static bool TryGetCurrentContextSource(out KingSkin source)
+    {
+        source = _currentContextSource!;
+        return source != null;
+    }
 
     private sealed class SkillHooks
     {
@@ -172,6 +179,8 @@ internal static class KingWeaponSupport
         }
 
         _contextDepth++;
+        var previousSource = _currentContextSource;
+        _currentContextSource = src;
 
         var savedSpr = hero.spr;
         var savedLevel = hero._level;
@@ -209,6 +218,7 @@ internal static class KingWeaponSupport
             hero.dir = savedDir;
             hero.dx = savedDx;
             hero.dy = savedDy;
+            _currentContextSource = previousSource;
             _contextDepth--;
         }
     }

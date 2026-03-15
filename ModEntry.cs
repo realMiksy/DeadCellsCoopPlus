@@ -1081,6 +1081,7 @@ namespace DeadCellsMultiplayerMod
             TryRecoverMissedFakeDeathFromLife();
             if (_netRole == NetRole.None || _net == null)
                 return;
+            TrySendCurrentDiveSkillInfoSnapshot();
             if (!_localFakeDead)
                 SendHeroCoords();
             ReceiveGhostCoords();
@@ -1698,6 +1699,8 @@ namespace DeadCellsMultiplayerMod
             if (!string.IsNullOrWhiteSpace(clientLabels[slot]))
                 _ghost.SetLabel(created, clientLabels[slot]);
 
+            ApplyCachedRemoteDiveSkillInfoIfAny(clientIds[slot], created);
+
             return created;
         }
 
@@ -1734,6 +1737,7 @@ namespace DeadCellsMultiplayerMod
             {
                 _remoteLastDoorMarkers.Remove(previousRemoteId);
                 _remotePendingDoorMarkers.Remove(previousRemoteId);
+                ClearCachedRemoteDiveSkillInfo(previousRemoteId);
             }
 
             clientIds[slot] = 0;
@@ -2103,6 +2107,10 @@ namespace DeadCellsMultiplayerMod
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             ResetLocalSkinSendCache();
             ResetDoorMarkerState();
+            _lastSentDiveInfoPayload = string.Empty;
+            _remoteDiveInfoPayloadById.Clear();
+            _lastLocalDiveStartSendTicks = 0;
+            _lastLocalDiveLandSendTicks = 0;
         }
 
         private IPEndPoint BuildEndpoint(string ipText, int port)

@@ -57,6 +57,9 @@ internal static class KingWeaponHooks
         Hook_Entity.addReceivedAffix += Hook_Entity_addReceivedAffix;
         Hook_Entity.removeAllReceivedAffix += Hook_Entity_removeAllReceivedAffix;
 
+        Hook__AttackUtils.createFromHero += Hook__AttackUtils_createFromHero;
+        Hook__AttackUtils.createFromHeroAndHit += Hook__AttackUtils_createFromHeroAndHit;
+
         Hook_Weapon.prepare += Hook_Weapon_prepare;
         Hook_Weapon.get_shootX += Hook_Weapon_get_shootX;
         Hook_Weapon.get_shootY += Hook_Weapon_get_shootY;
@@ -361,6 +364,48 @@ internal static class KingWeaponHooks
         if(ShouldSuppressPlayerAffixesInKingContext(self))
             return;
         orig(self, affixId);
+    }
+
+    private static AttackData Hook__AttackUtils_createFromHero(
+        Hook__AttackUtils.orig_createFromHero orig,
+        Entity source,
+        object baseDmg,
+        int? tier)
+    {
+        if(ShouldRedirectHeroAttackSourceToKingSkin(source, out var redirect))
+            source = redirect;
+        return orig(source, baseDmg, tier);
+    }
+
+    private static AttackData Hook__AttackUtils_createFromHeroAndHit(
+        Hook__AttackUtils.orig_createFromHeroAndHit orig,
+        Entity source,
+        object baseDmg,
+        int? tier,
+        Entity target)
+    {
+        if(ShouldRedirectHeroAttackSourceToKingSkin(source, out var redirect))
+            source = redirect;
+        return orig(source, baseDmg, tier, target);
+    }
+
+    private static bool ShouldRedirectHeroAttackSourceToKingSkin(Entity? source, out Entity redirectedSource)
+    {
+        redirectedSource = source!;
+        if(source == null)
+            return false;
+        if(!KingWeaponSupport.IsInKingContext || !KingWeaponSupport.IsLocalHeroDamageAllowedInKingContext)
+            return false;
+
+        var localHero = ModEntry.me;
+        if(localHero == null || !IsSameEntity(source, localHero))
+            return false;
+
+        if(!KingWeaponSupport.TryGetCurrentContextSource(out var kingSource) || kingSource == null || kingSource.destroyed)
+            return false;
+
+        redirectedSource = kingSource;
+        return true;
     }
 
     private static void Hook_Weapon_prepare(Hook_Weapon.orig_prepare orig, Weapon self, double attackSpeed)
