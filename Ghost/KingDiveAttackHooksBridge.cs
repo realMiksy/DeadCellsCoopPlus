@@ -55,6 +55,8 @@ public partial class ModEntry
         try { owner = self.hero; } catch { return; }
         if (owner == null || !ReferenceEquals(owner, me))
             return;
+        if (!IsPrimaryLocalDiveAttack(self))
+            return;
 
         var isDiving = IsDiveReallyActive(self);
         if (!isDiving)
@@ -85,6 +87,8 @@ public partial class ModEntry
         Hero? owner;
         try { owner = self.hero; } catch { return; }
         if (owner == null || !ReferenceEquals(owner, me))
+            return;
+        if (!IsPrimaryLocalDiveAttack(self))
             return;
         if (!wasDiving)
             return;
@@ -117,6 +121,22 @@ public partial class ModEntry
         try
         {
             return self.isActive();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool IsPrimaryLocalDiveAttack(DiveAttack self)
+    {
+        if (self == null || me == null)
+            return false;
+
+        try
+        {
+            var primary = me.mainSkillsManager?.getMainSkill(DiveAttack.Class) as DiveAttack;
+            return primary != null && ReferenceEquals(primary, self);
         }
         catch
         {

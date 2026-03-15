@@ -93,6 +93,7 @@ namespace DeadCellsMultiplayerMod
             // dynamic key = Data.Class.item.all.getDyn(278);
             // dynamic props = key.props;
             // props.prct = 0;
+            king.spr._animManager.play("idle".AsHaxeString(), null, null).loop(null);
             return king;
         }
 

@@ -870,9 +870,8 @@ namespace DeadCellsMultiplayerMod
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext &&
-                    Stopwatch.GetTimestamp() >= _suppressHeroAnimUntilTicks &&
                     !IsAttackAnim(play))
-                    SendHeroAnim(play, queueAnim, g, force: true);
+                    SendHeroAnim(play, queueAnim, g);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
@@ -1801,7 +1800,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
-
             var shieldActive = client.kingWeaponsManager != null && client.kingWeaponsManager.IsShieldActive;
             if (shieldActive && ShouldLoopRemoteAnim(anim))
             {
@@ -1833,8 +1831,7 @@ namespace DeadCellsMultiplayerMod
                     try { client.removeAllAffects(98); } catch { }
                     try { client.removeAllAffects(99); } catch { }
                 }
-
-                animManager.play(anim.AsHaxeString(), queueAnim, g).loop(null);
+                animManager.play(anim.AsHaxeString(), null, null).loop(null);
                 return;
             }
 
@@ -1851,7 +1848,6 @@ namespace DeadCellsMultiplayerMod
             if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
 
-            // Loop only locomotion/idles to avoid getting stuck in "hold/parry" forever.
             if (a.StartsWith("idle", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("run", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("walk", StringComparison.OrdinalIgnoreCase)) return true;
@@ -1862,6 +1858,7 @@ namespace DeadCellsMultiplayerMod
             if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (a.IndexOf("volte", StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
             return false;
         }

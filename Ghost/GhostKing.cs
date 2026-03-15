@@ -526,8 +526,11 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                 return;
 
             Texture normalMapFromGroup = heroLib.getNormalMapFromGroup(group);
-            int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
-            this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
+            if (!TryRetargetCurrentSprite(heroLib, group, normalMapFromGroup))
+            {
+                int? dp_ROOM_MAIN_HERO = Const.Class.DP_ROOM_MAIN_HERO;
+                this.initSprite(heroLib, group, 0.5, 0.5, dp_ROOM_MAIN_HERO, true, null, normalMapFromGroup);
+            }
             this.initColorMap(skinInfo);
 
             ArrayObj glowData = CdbTypeConverter.Class.getGlowData(skinInfo);
@@ -557,6 +560,28 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             initScarf();
 
 
+        }
+
+        private bool TryRetargetCurrentSprite(SpriteLib heroLib, dc.String group, Texture normalMap)
+        {
+            var currentSprite = spr;
+            if (currentSprite == null)
+                return false;
+
+            try
+            {
+                int startFrame = 0;
+                bool stopAllAnims = true;
+                currentSprite.set(heroLib, group, Ref<int>.From(ref startFrame), Ref<bool>.From(ref stopAllAnims));
+                if (normalMap != null)
+                    currentSprite.addOrUpdateNormalMapTexture(normalMap);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void ApplyRemoteSkin(string? skin)
