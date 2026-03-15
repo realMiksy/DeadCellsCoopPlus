@@ -19,9 +19,11 @@ public partial class ModEntry
     private const int RemoteDiveAttackSlot = -1;
     private const double LocalDiveStartRepeatBlockSeconds = 0.04;
     private const double LocalDiveLandRepeatBlockSeconds = 0.04;
+    private const double DiveInfoRescanMinSeconds = 0.2;
 
     private long _lastLocalDiveStartSendTicks;
     private long _lastLocalDiveLandSendTicks;
+    private long _lastDiveInfoScanTicks;
     private string _lastSentDiveInfoPayload = string.Empty;
     private readonly Dictionary<int, string> _remoteDiveInfoPayloadById = new();
 
@@ -58,8 +60,6 @@ public partial class ModEntry
         if (!isDiving)
             return;
 
-        TrySendDiveSkillInfoIfChanged(net, self);
-
         if (IsLocalDiveRepeat(ref _lastLocalDiveStartSendTicks, LocalDiveStartRepeatBlockSeconds))
             return;
 
@@ -88,8 +88,6 @@ public partial class ModEntry
             return;
         if (!wasDiving)
             return;
-
-        TrySendDiveSkillInfoIfChanged(net, self);
 
         if (IsLocalDiveRepeat(ref _lastLocalDiveLandSendTicks, LocalDiveLandRepeatBlockSeconds))
             return;
@@ -174,6 +172,8 @@ public partial class ModEntry
         if (_netRole == NetRole.None || me == null)
             return;
         if (KingWeaponSupport.IsInKingContext)
+            return;
+        if (IsLocalDiveRepeat(ref _lastDiveInfoScanTicks, DiveInfoRescanMinSeconds))
             return;
 
         var net = _net;

@@ -2111,6 +2111,7 @@ namespace DeadCellsMultiplayerMod
             _remoteDiveInfoPayloadById.Clear();
             _lastLocalDiveStartSendTicks = 0;
             _lastLocalDiveLandSendTicks = 0;
+            _lastDiveInfoScanTicks = 0;
         }
 
         private IPEndPoint BuildEndpoint(string ipText, int port)
