@@ -29,6 +29,7 @@ public class InteractionSync :
     private const double BreakableGroundPosTolerance = 24.0;
     private const double SwitchBossRunePosTolerance = 32.0;
     private const double ElevatorPosTolerance = 48.0;
+    private const double PortalPosTolerance = 48.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
     private const int DoorCloseDelayMs = 250;
@@ -42,6 +43,7 @@ public class InteractionSync :
     private bool _applyingRemoteVineLadderEvents;
     private bool _applyingRemoteTeleportEvents;
     private bool _applyingRemoteBreakableGroundEvents;
+    private bool _applyingRemotePortalEvents;
 
     public InteractionSync(ModEntry entry)
     {
@@ -64,6 +66,8 @@ public class InteractionSync :
         Hook_TreasureChest.open += Hook_TreasureChest_open;
         Hook_VineLadder.activate += Hook_VineLadder_activate;
         Hook_Teleport.open += Hook_Teleport_open;
+        Hook_Portal.show += Hook_Portal_show;
+        Hook_Portal.close += Hook_Portal_close;
         Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
         Hook_SwitchBossRune.canBeActivated += Hook_SwitchBossRune_canBeActivated;
         Hook_SwitchBossRune.close += Hook_SwitchBossRune_close;
@@ -273,6 +277,35 @@ public class InteractionSync :
         TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterTeleport(x, y), "Teleport");
     }
 
+    private void Hook_Portal_show(Hook_Portal.orig_show orig, Portal self)
+    {
+        orig(self);
+        TrySendPortalEvent(self, "show");
+    }
+
+    private void Hook_Portal_close(Hook_Portal.orig_close orig, Portal self)
+    {
+        orig(self);
+        TrySendPortalEvent(self, "close");
+    }
+
+    private void TrySendPortalEvent(Portal self, string action)
+    {
+        if (_applyingRemotePortalEvents)
+            return;
+        if (!IsNetReadyForSend(GameMenu.NetRef))
+            return;
+        try
+        {
+            var (x, y) = GetEntityPixelPos(self);
+            GameMenu.NetRef!.SendInterPortal(x, y, action);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[InteractionSync] Portal send failed action={Action}", action);
+        }
+    }
+
     private static (double x, double y) GetEntityPixelPos(Entity e)
     {
         if (e?.spr == null)
@@ -347,6 +380,11 @@ public class InteractionSync :
         if (net.TryConsumeInterTeleportEvents(out var teleportEvents))
         {
             ApplyRemoteTeleportEvents(teleportEvents);
+        }
+
+        if (net.TryConsumeInterPortalEvents(out var portalEvents))
+        {
+            ApplyRemotePortalEvents(portalEvents);
         }
 
         if (net.IsHost)
@@ -607,6 +645,40 @@ public class InteractionSync :
         }
     }
 
+    private void ApplyRemotePortalEvents(List<InterPortalEvent> events)
+    {
+        var level = ModEntry.me?._level;
+        if (level == null || events == null || events.Count == 0)
+            return;
+
+        _applyingRemotePortalEvents = true;
+        try
+        {
+            foreach (var ev in events)
+            {
+                var portal = FindPortalByPos(level, ev.X, ev.Y);
+                if (portal == null)
+                    continue;
+
+                try
+                {
+                    if (ev.Action == "show")
+                        portal.show();
+                    else if (ev.Action == "close")
+                        portal.close();
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply portal event failed x={X} y={Y} action={Action}", ev.X, ev.Y, ev.Action);
+                }
+            }
+        }
+        finally
+        {
+            _applyingRemotePortalEvents = false;
+        }
+    }
+
     private void ApplyRemoteTeleportEvents(List<InterTeleportEvent> events)
     {
         var level = ModEntry.me?._level;
@@ -811,6 +883,48 @@ public class InteractionSync :
         if (nearest != null)
             return nearest;
         return FindTeleportInTriggers(level, x, y);
+    }
+
+    private static Portal? FindPortalByPos(Level level, double x, double y)
+    {
+        var byPos = FindInteractByPos<Portal>(level, x, y, PortalPosTolerance);
+        if (byPos != null)
+            return byPos;
+        var nearest = FindNearestByPos<Portal>(level, x, y, PortalPosTolerance * PortalPosTolerance * 4);
+        if (nearest != null)
+            return nearest;
+        return FindPortalInTriggers(level, x, y);
+    }
+
+    private static Portal? FindPortalInTriggers(Level level, double x, double y)
+    {
+        try
+        {
+            var triggers = (level as dynamic)?.triggers;
+            if (triggers == null)
+                return null;
+            var len = (int)(triggers.length ?? 0);
+            Portal? nearest = null;
+            double nearestSq = PortalPosTolerance * PortalPosTolerance * 4;
+            for (var i = 0; i < len; i++)
+            {
+                var t = triggers.getDyn(i) as Portal;
+                if (t?.spr == null) continue;
+                var dx = t.spr.x - x;
+                var dy = t.spr.y - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestSq)
+                {
+                    nearestSq = dSq;
+                    nearest = t;
+                }
+            }
+            return nearest;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static Teleport? FindTeleportInTriggers(Level level, double x, double y)

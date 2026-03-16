@@ -103,3 +103,17 @@ public readonly struct InterBossRuneUpdateCellsEvent
         Add = add;
     }
 }
+
+public readonly struct InterPortalEvent
+{
+    public readonly double X;
+    public readonly double Y;
+    public readonly string Action;
+
+    public InterPortalEvent(double x, double y, string action)
+    {
+        X = x;
+        Y = y;
+        Action = action ?? string.Empty;
+    }
+}

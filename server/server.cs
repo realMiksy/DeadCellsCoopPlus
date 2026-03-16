@@ -533,6 +533,7 @@ public sealed partial class NetNode : IDisposable
     private readonly List<InterTeleportEvent> _pendingInterTeleportEvents = new();
     private readonly List<InterBreakableGroundEvent> _pendingInterBreakableGroundEvents = new();
     private readonly List<InterBossRuneUpdateCellsEvent> _pendingBossRuneUpdateCells = new();
+    private readonly List<InterPortalEvent> _pendingInterPortalEvents = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind
@@ -1855,6 +1856,23 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("INTERPORTAL|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["INTERPORTAL|".Length..];
+            if (TryParseInterPortalPayload(payload, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingInterPortalEvents.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                    forwardLine = $"INTERPORTAL|{ev.Action}|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}\n";
+            }
+            return true;
+        }
+
         if (line.StartsWith("MOBEVENT|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["MOBEVENT|".Length..];
@@ -2056,6 +2074,7 @@ public sealed partial class NetNode : IDisposable
             _pendingInterTeleportEvents.Clear();
             _pendingInterBreakableGroundEvents.Clear();
             _pendingBossRuneUpdateCells.Clear();
+            _pendingInterPortalEvents.Clear();
         }
         if (_useSteamTransport)
         {
@@ -2932,6 +2951,29 @@ public sealed partial class NetNode : IDisposable
             return false;
 
         ev = new InterBreakableGroundEvent(x, y);
+        return true;
+    }
+
+    private static bool TryParseInterPortalPayload(string payload, out InterPortalEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 3)
+            return false;
+
+        var action = parts[0]?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(action) || (action != "show" && action != "close"))
+            return false;
+
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        ev = new InterPortalEvent(x, y, action);
         return true;
     }
 
@@ -4202,6 +4244,18 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"BOSSRUNE_UPDATE_CELLS|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{(add ? 1 : 0)}");
     }
 
+    public void SendInterPortal(double x, double y, string action)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+        if (string.IsNullOrWhiteSpace(action))
+            return;
+
+        SendRaw($"INTERPORTAL|{action}|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
+    }
+
     private void SendRaw(string payload)
     {
         var line = payload.EndsWith('\n') ? payload : payload + "\n";
@@ -4650,6 +4704,22 @@ public sealed partial class NetNode : IDisposable
 
             events = new List<InterBossRuneUpdateCellsEvent>(_pendingBossRuneUpdateCells);
             _pendingBossRuneUpdateCells.Clear();
+            return events.Count > 0;
+        }
+    }
+
+    public bool TryConsumeInterPortalEvents(out List<InterPortalEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingInterPortalEvents.Count == 0)
+            {
+                events = new List<InterPortalEvent>();
+                return false;
+            }
+
+            events = new List<InterPortalEvent>(_pendingInterPortalEvents);
+            _pendingInterPortalEvents.Clear();
             return events.Count > 0;
         }
     }
