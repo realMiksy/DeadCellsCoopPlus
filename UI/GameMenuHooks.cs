@@ -78,6 +78,7 @@ namespace DeadCellsMultiplayerMod
             bool? isEnable,
             Ref<int> color)
         {
+            ModEntry.PumpSteamCallbacksForOverlay();
             GameMenu.ProcessMainThreadQueue();
             cb = WrapQuitCallbackIfNeeded(str, cb);
             var ret = orig(self, str, cb, help, isEnable, color);

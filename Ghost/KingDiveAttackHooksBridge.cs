@@ -29,15 +29,72 @@ public partial class ModEntry
 
     private void Hook_DiveAttack_onStart(Hook_DiveAttack.orig_onStart orig, DiveAttack self)
     {
-        orig(self);
+        if (!IsDiveAttackHookContextValid(self, out _))
+            return;
+
+        try
+        {
+            orig(self);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("[NetMod] DiveAttack.onStart failed: {Message}", ex.Message);
+            try { self?.end(); } catch { }
+            return;
+        }
+
         NotifyLocalDiveAttackStartedFromHooks(self);
     }
 
     private void Hook_DiveAttack_onOwnerLand(Hook_DiveAttack.orig_onOwnerLand orig, DiveAttack self, double high)
     {
+        if (!IsDiveAttackHookContextValid(self, out _))
+            return;
+
         var wasDiving = IsDiveReallyActive(self);
-        orig(self, high);
+        try
+        {
+            orig(self, high);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("[NetMod] DiveAttack.onOwnerLand failed: {Message}", ex.Message);
+            try { self?.end(); } catch { }
+            return;
+        }
+
         NotifyLocalDiveAttackLandedFromHooks(self, high, wasDiving);
+    }
+
+    private static bool IsDiveAttackHookContextValid(DiveAttack? self, out Hero? hero)
+    {
+        hero = null;
+        if (self == null)
+            return false;
+
+        try
+        {
+            hero = self.hero;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (hero == null)
+            return false;
+
+        try
+        {
+            if (hero.destroyed)
+                return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void NotifyLocalDiveAttackStartedFromHooks(DiveAttack? self)
