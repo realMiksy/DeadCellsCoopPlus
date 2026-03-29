@@ -62,6 +62,7 @@ namespace DeadCellsMultiplayerMod
         private static bool s_steamOverlayCallbackPending;
         private static Timer? s_steamCallbackPumpTimer;
         private static int s_steamOverlayCallbackRetryCount;
+        private static bool s_steamApiReady;
         private static string s_lastSteamLaunchCommand = string.Empty;
         private static string s_lastSteamLaunchConnectLobbyParam = string.Empty;
         private static ulong s_lastOverlayJoinLobbyId;
@@ -212,9 +213,13 @@ namespace DeadCellsMultiplayerMod
         private readonly Dictionary<string, long> _pendingBossCineApplyByLevel = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, long> _suppressBossCineEchoByLevel = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _completedBossCineLevels = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _appliedBossHeroTeleportLevels = new(StringComparer.OrdinalIgnoreCase);
         private const double BossCineApplyPendingTtlSeconds = 20.0;
         private const double BossCineEchoSuppressSeconds = 12.0;
+        private const double BossHeroTeleportYOffsetPx = 20.0;
+        private const double BossHeroTeleportEchoSuppressSeconds = 1.5;
         private int _suppressBossCineSendDepth;
+        private long _suppressBossTriggerNetSendUntilTick;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -357,6 +362,7 @@ namespace DeadCellsMultiplayerMod
             GameMenu.SetRole(NetRole.None);
             s_steamOverlayCallbackPending = true;
             s_steamOverlayCallbackRetryCount = 0;
+            TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
             TryParseConnectLobbyFromCommandLine();
         }
 
@@ -395,10 +401,10 @@ namespace DeadCellsMultiplayerMod
             s_steamOverlayCallbackRetryCount++;
             try
             {
-                SteamConnect.PrepareSteamNativePathForRuntime();
-                if (!SteamAPI.Init())
+                var shouldLogFailure = s_steamOverlayCallbackRetryCount == 1 || s_steamOverlayCallbackRetryCount % 60 == 0;
+                if (!TryEnsureSteamApiInitialized($"callback registration attempt {s_steamOverlayCallbackRetryCount}", shouldLogFailure))
                 {
-                    if (s_steamOverlayCallbackRetryCount == 1 || s_steamOverlayCallbackRetryCount % 60 == 0)
+                    if (shouldLogFailure)
                         Instance?.Logger.Debug("[NetMod] Steam overlay: SteamAPI.Init()=false (attempt {Attempt}). Trying callback without Init (game may have Steam).", s_steamOverlayCallbackRetryCount);
                     try
                     {
@@ -560,8 +566,38 @@ namespace DeadCellsMultiplayerMod
             TryPollSteamOverlayJoinFromLaunchData();
         }
 
+        private static bool TryEnsureSteamApiInitialized(string source, bool logFailure)
+        {
+            if (s_steamApiReady)
+                return true;
+
+            try
+            {
+                SteamConnect.PrepareSteamNativePathForRuntime();
+                if (SteamAPI.Init())
+                {
+                    s_steamApiReady = true;
+                    Instance?.Logger.Information("[NetMod][Steam] SteamAPI.Init succeeded ({Source})", source);
+                    return true;
+                }
+
+                if (logFailure)
+                    Instance?.Logger.Debug("[NetMod][Steam] SteamAPI.Init returned false ({Source})", source);
+            }
+            catch (Exception ex)
+            {
+                if (logFailure)
+                    Instance?.Logger.Warning(ex, "[NetMod][Steam] SteamAPI.Init failed ({Source}): {Message}", source, ex.Message);
+            }
+
+            return false;
+        }
+
         private static void TryPollSteamOverlayJoinFromLaunchData()
         {
+            if (!s_steamApiReady)
+                return;
+
             var nowTicks = Environment.TickCount64;
             if (nowTicks < s_nextSteamLaunchPollTicks)
                 return;
@@ -957,9 +993,12 @@ namespace DeadCellsMultiplayerMod
         {
             var senderLevelId = string.IsNullOrWhiteSpace(levelId) ? string.Empty : levelId.Trim();
             string? senderGenericEventId = null;
-            double? senderX = null;
-            double? senderY = null;
-            int? senderDir = null;
+            double? senderPreX = null;
+            double? senderPreY = null;
+            int? senderPreDir = null;
+            double? senderPostX = null;
+            double? senderPostY = null;
+            int? senderPostDir = null;
 
             if (self != null)
             {
@@ -967,30 +1006,14 @@ namespace DeadCellsMultiplayerMod
             }
 
             if (dh != null && me != null && ReferenceEquals(dh, me))
-            {
-                try
-                {
-                    if (me.spr != null)
-                    {
-                        senderX = me.spr.x;
-                        senderY = me.spr.y;
-                    }
-                    else
-                    {
-                        senderX = me.get_targetSprPosX();
-                        senderY = me.get_targetSprPosY();
-                    }
-                }
-                catch
-                {
-                }
-
-                try { senderDir = me.dir; } catch { }
-            }
+                TryCaptureBossCineHeroPosition(me, out senderPreX, out senderPreY, out senderPreDir);
 
             orig(self, dh);
 
             if (_suppressBossCineSendDepth > 0)
+                return;
+            if (_suppressBossTriggerNetSendUntilTick != 0 &&
+                Stopwatch.GetTimestamp() < _suppressBossTriggerNetSendUntilTick)
                 return;
             if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
                 return;
@@ -999,12 +1022,30 @@ namespace DeadCellsMultiplayerMod
 
             if (!BossLevelIds.Contains(senderLevelId))
                 return;
+            if (IsBossCineCompleted(senderLevelId) ||
+                IsBossCineSendSuppressed(senderLevelId) ||
+                HasAppliedBossHeroTeleport(senderLevelId))
+                return;
             if (string.IsNullOrWhiteSpace(senderGenericEventId))
                 return;
             if (!BossRoomGenericEventIds.Contains(senderGenericEventId))
                 return;
+            if (!DidBossTriggerStart(dc.pr.Game.Class.ME, self))
+                return;
 
-            if (TrySendBossCinePayload(BuildBossCinePayload(senderLevelId, senderGenericEventId, senderX, senderY, senderDir)))
+            TryCaptureBossCineHeroPosition(me, out senderPostX, out senderPostY, out senderPostDir);
+            if (senderPreX.HasValue && senderPreY.HasValue)
+                _net.SendBossHeroTeleport(senderPreX.Value, senderPreY.Value, senderPreDir ?? 0);
+
+            if (TrySendBossCinePayload(BuildBossCinePayload(
+                senderLevelId,
+                senderGenericEventId,
+                senderPreX,
+                senderPreY,
+                senderPreDir,
+                senderPostX,
+                senderPostY,
+                senderPostDir)))
                 MarkBossCineCompleted(senderLevelId);
         }
 
@@ -1331,6 +1372,7 @@ namespace DeadCellsMultiplayerMod
             _pendingBossCineApplyByLevel.Clear();
             _suppressBossCineEchoByLevel.Clear();
             _completedBossCineLevels.Clear();
+            _appliedBossHeroTeleportLevels.Clear();
             _lastBossCineSentLevelId = null;
             _lastBossCineSentTick = 0;
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
@@ -1389,6 +1431,7 @@ namespace DeadCellsMultiplayerMod
             GameMenu.ProcessMainThreadQueue();
             GameMenu.TickMenu(dt);
             DetectAndSendBossCine();
+            ApplyReceivedBossHeroTeleport();
             ApplyReceivedBossCine();
             SuppressRemoteBossDeathCineIfNeeded();
         }
@@ -1440,7 +1483,7 @@ namespace DeadCellsMultiplayerMod
             if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
                 return false;
 
-            if (!TryParseBossCinePayload(payload, out var levelId, out var _, out var _, out var _, out var _))
+            if (!TryParseBossCinePayload(payload, out var levelId, out var _, out var _, out var _, out var _, out var _, out var _, out var _))
                 return false;
 
             if (IsBossCineCompleted(levelId))
@@ -1467,30 +1510,26 @@ namespace DeadCellsMultiplayerMod
             int? dir = null;
             if (me != null)
             {
-                try
-                {
-                    if (me.spr != null)
-                    {
-                        x = me.spr.x;
-                        y = me.spr.y;
-                    }
-                    else
-                    {
-                        x = me.get_targetSprPosX();
-                        y = me.get_targetSprPosY();
-                    }
-                }
-                catch
-                {
-                }
-
-                try { dir = me.dir; } catch { }
+                TryCaptureBossCineHeroPosition(me, out x, out y, out dir);
             }
 
-            return BuildBossCinePayload(levelId, genericEventId, x, y, dir);
+            return BuildBossCinePayload(levelId, genericEventId, x, y, dir, null, null, null);
         }
 
         private string BuildBossCinePayload(string levelId, string? genericEventId, double? x, double? y, int? dir)
+        {
+            return BuildBossCinePayload(levelId, genericEventId, x, y, dir, null, null, null);
+        }
+
+        private string BuildBossCinePayload(
+            string levelId,
+            string? genericEventId,
+            double? x,
+            double? y,
+            int? dir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
         {
             var safeLevelId = string.IsNullOrWhiteSpace(levelId)
                 ? string.Empty
@@ -1509,9 +1548,13 @@ namespace DeadCellsMultiplayerMod
             if (!x.HasValue || !y.HasValue)
                 return string.IsNullOrEmpty(safeEventId) ? safeLevelId : $"{safeLevelId}|{safeEventId}";
 
+            var resolvedFinalX = finalX ?? x.Value;
+            var resolvedFinalY = finalY ?? y.Value;
+            var resolvedFinalDir = finalDir ?? dir ?? 0;
+
             return string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"{safeLevelId}|{safeEventId}|{x.Value}|{y.Value}|{dir ?? 0}");
+                $"{safeLevelId}|{safeEventId}|{x.Value}|{y.Value}|{dir ?? 0}|{resolvedFinalX}|{resolvedFinalY}|{resolvedFinalDir}");
         }
 
         private static bool TryParseBossCinePayload(
@@ -1520,13 +1563,19 @@ namespace DeadCellsMultiplayerMod
             out string? genericEventId,
             out double? snapX,
             out double? snapY,
-            out int? snapDir)
+            out int? snapDir,
+            out double? finalX,
+            out double? finalY,
+            out int? finalDir)
         {
             levelId = string.Empty;
             genericEventId = null;
             snapX = null;
             snapY = null;
             snapDir = null;
+            finalX = null;
+            finalY = null;
+            finalDir = null;
 
             if (string.IsNullOrWhiteSpace(payload))
                 return false;
@@ -1567,7 +1616,50 @@ namespace DeadCellsMultiplayerMod
                 snapDir = parsedDir;
             }
 
+            if (parts.Length >= 7)
+            {
+                if (double.TryParse(parts[5], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalX))
+                    finalX = parsedFinalX;
+                if (double.TryParse(parts[6], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalY))
+                    finalY = parsedFinalY;
+            }
+
+            if (parts.Length >= 8 &&
+                int.TryParse(parts[7], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedFinalDir))
+            {
+                finalDir = parsedFinalDir;
+            }
+
             return true;
+        }
+
+        private static void TryCaptureBossCineHeroPosition(Hero? hero, out double? x, out double? y, out int? dir)
+        {
+            x = null;
+            y = null;
+            dir = null;
+
+            if (hero == null)
+                return;
+
+            try
+            {
+                if (hero.spr != null)
+                {
+                    x = hero.spr.x;
+                    y = hero.spr.y;
+                }
+                else
+                {
+                    x = hero.get_targetSprPosX();
+                    y = hero.get_targetSprPosY();
+                }
+            }
+            catch
+            {
+            }
+
+            try { dir = hero.dir; } catch { }
         }
 
         private void ApplyReceivedBossCine()
@@ -1578,6 +1670,7 @@ namespace DeadCellsMultiplayerMod
                 _pendingBossCineApplyByLevel.Clear();
                 _suppressBossCineEchoByLevel.Clear();
                 _completedBossCineLevels.Clear();
+                _appliedBossHeroTeleportLevels.Clear();
                 return;
             }
 
@@ -1587,10 +1680,12 @@ namespace DeadCellsMultiplayerMod
                 for (int i = 0; i < levelIds.Count; i++)
                 {
                     var receivedPayload = levelIds[i];
-                    if (!TryParseBossCinePayload(receivedPayload, out var receivedLevelId, out var _, out var _, out var _, out var _))
+                    if (!TryParseBossCinePayload(receivedPayload, out var receivedLevelId, out var receivedGenericEventId, out var receivedSnapX, out var receivedSnapY, out var _, out var _, out var _, out var _))
                         continue;
 
                     ClearBossCineCompleted(receivedLevelId);
+                    if (!string.IsNullOrWhiteSpace(receivedGenericEventId) && receivedSnapX.HasValue && receivedSnapY.HasValue)
+                        SuppressBossCineSend(receivedLevelId);
 
                     var normalized = receivedPayload
                         .Replace("\r", string.Empty, StringComparison.Ordinal)
@@ -1621,7 +1716,7 @@ namespace DeadCellsMultiplayerMod
                     continue;
                 }
 
-                if (!TryParseBossCinePayload(pendingPayload, out var pendingLevelId, out var genericEventId, out var snapX, out var snapY, out var snapDir))
+                if (!TryParseBossCinePayload(pendingPayload, out var pendingLevelId, out var genericEventId, out var snapX, out var snapY, out var snapDir, out var finalX, out var finalY, out var finalDir))
                 {
                     (remove ??= new List<string>()).Add(pendingPayload);
                     continue;
@@ -1631,7 +1726,14 @@ namespace DeadCellsMultiplayerMod
                     !string.Equals(pendingLevelId, currentLevelId, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (TryTriggerBossCinematic(pendingLevelId, genericEventId, snapX, snapY, snapDir))
+                var triggered =
+                    !string.IsNullOrWhiteSpace(genericEventId) &&
+                    snapX.HasValue &&
+                    snapY.HasValue
+                        ? TrySyncBossCinematicFromLocalTrigger(pendingLevelId, genericEventId)
+                        : TryTriggerBossCinematic(pendingLevelId, genericEventId, snapX, snapY, snapDir, finalX, finalY, finalDir);
+
+                if (triggered)
                 {
                     MarkBossCineCompleted(pendingLevelId);
                     SuppressBossCineSend(pendingLevelId);
@@ -1646,7 +1748,115 @@ namespace DeadCellsMultiplayerMod
                 _pendingBossCineApplyByLevel.Remove(remove[i]);
         }
 
-        private bool TryTriggerBossCinematic(string levelId, string? genericEventId, double? snapX, double? snapY, int? snapDir)
+        private void ApplyReceivedBossHeroTeleport()
+        {
+            var net = _net;
+            if (net == null || !net.IsAlive)
+                return;
+
+            if (!net.TryConsumeBossHeroTeleportEvents(out var teleports) || teleports.Count == 0)
+                return;
+
+            var localHero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
+            if (localHero == null)
+                return;
+
+            var localId = net.id;
+            var currentLevelId = GetCurrentLevelId();
+            foreach (var teleport in teleports)
+            {
+                if (teleport.UserId > 0 && teleport.UserId == localId)
+                    continue;
+                if (HasAppliedBossHeroTeleport(currentLevelId))
+                    continue;
+
+                MarkBossHeroTeleportApplied(currentLevelId);
+                SuppressBossCineSend(currentLevelId);
+                _suppressBossTriggerNetSendUntilTick =
+                    Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * BossHeroTeleportEchoSuppressSeconds);
+                try { localHero.cancelVelocities(); } catch { }
+                try { localHero.setPosPixel(teleport.X, teleport.Y - BossHeroTeleportYOffsetPx); } catch { }
+                try { localHero.dir = teleport.Dir; } catch { }
+            }
+        }
+
+        private bool TrySyncBossCinematicFromLocalTrigger(
+            string levelId,
+            string? genericEventId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(levelId) || !BossLevelIds.Contains(levelId))
+                    return false;
+
+                var game = dc.pr.Game.Class.ME;
+                var hero = game?.hero ?? me;
+                var level = hero?._level;
+                if (game == null || hero == null || level == null)
+                    return false;
+
+                var currentCine = game.curCine;
+                if (currentCine != null && !currentCine.destroyed)
+                    return IsBossIntroCinematic(currentCine);
+
+                if (GameHasAnyCinematic(game))
+                    return false;
+
+                if (!DidBossHiddenTriggerStart(level, genericEventId))
+                    return false;
+
+                _lastBossCineSentLevelId = levelId;
+                _lastBossCineSentTick = Stopwatch.GetTimestamp();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool DidBossHiddenTriggerStart(Level level, string? genericEventId)
+        {
+            if (level == null || string.IsNullOrWhiteSpace(genericEventId))
+                return false;
+
+            try
+            {
+                var entitiesByClass = level.entitiesByClass;
+                var triggerClid = HiddenTrigger.Class.__clid;
+                var entries = entitiesByClass?.get(triggerClid) as dc.hl.types.ArrayObj;
+                if (entries == null)
+                    return false;
+
+                for (var i = 0; i < entries.length; i++)
+                {
+                    if (entries.getDyn(i) is not HiddenTrigger ht)
+                        continue;
+
+                    var evId = ht.genericEventId?.ToString();
+                    if (!string.Equals(evId, genericEventId, StringComparison.Ordinal))
+                        continue;
+
+                    if (ht.used)
+                        return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private bool TryTriggerBossCinematic(
+            string levelId,
+            string? genericEventId,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
         {
             try
             {
@@ -1705,6 +1915,7 @@ namespace DeadCellsMultiplayerMod
                             RunWithSuppressedBossCineSend(() => ht.trigger(hero));
                             if (DidBossTriggerStart(game, ht))
                             {
+                                TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                                 _lastBossCineSentLevelId = levelId;
                                 _lastBossCineSentTick = Stopwatch.GetTimestamp();
                                 return true;
@@ -1713,7 +1924,7 @@ namespace DeadCellsMultiplayerMod
                             return false;
                         }
 
-                        if (usedReplayCandidate != null && TryReplayBossHiddenTrigger(usedReplayCandidate, hero, snapX, snapY, snapDir))
+                        if (usedReplayCandidate != null && TryReplayBossHiddenTrigger(usedReplayCandidate, hero, snapX, snapY, snapDir, finalX, finalY, finalDir))
                         {
                             _lastBossCineSentLevelId = levelId;
                             _lastBossCineSentTick = Stopwatch.GetTimestamp();
@@ -1723,7 +1934,7 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 if (!string.IsNullOrWhiteSpace(genericEventId) &&
-                    TryCreateBossCinematicDirectly(level, hero, genericEventId, snapX, snapY, snapDir))
+                    TryCreateBossCinematicDirectly(level, hero, genericEventId, snapX, snapY, snapDir, finalX, finalY, finalDir))
                 {
                     MarkBossRoomHiddenTriggersUsed(level, genericEventId);
                     _lastBossCineSentLevelId = levelId;
@@ -1738,7 +1949,15 @@ namespace DeadCellsMultiplayerMod
             return false;
         }
 
-        private bool TryReplayBossHiddenTrigger(HiddenTrigger trigger, Hero hero, double? snapX, double? snapY, int? snapDir)
+        private bool TryReplayBossHiddenTrigger(
+            HiddenTrigger trigger,
+            Hero hero,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
         {
             if (trigger == null || hero == null)
                 return false;
@@ -1755,7 +1974,10 @@ namespace DeadCellsMultiplayerMod
                 RunWithSuppressedBossCineSend(() => trigger.trigger(hero));
 
                 if (DidBossTriggerStart(game, trigger))
+                {
+                    TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                     return true;
+                }
 
                 trigger.used = wasUsed;
                 return false;
@@ -1806,7 +2028,7 @@ namespace DeadCellsMultiplayerMod
                 return;
 
             try { hero.cancelVelocities(); } catch { }
-            SnapHeroToDownedPosition(hero, snapX.Value, snapY.Value);
+            SnapHeroToDownedPosition(hero, snapX.Value, snapY.Value, clampToGround: false);
             if (snapDir.HasValue)
             {
                 try { hero.dir = snapDir.Value; } catch { }
@@ -1829,7 +2051,16 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private bool TryCreateBossCinematicDirectly(Level level, Hero hero, string genericEventId, double? snapX, double? snapY, int? snapDir)
+        private bool TryCreateBossCinematicDirectly(
+            Level level,
+            Hero hero,
+            string genericEventId,
+            double? snapX,
+            double? snapY,
+            int? snapDir,
+            double? finalX,
+            double? finalY,
+            int? finalDir)
         {
             if (level == null || hero == null || string.IsNullOrWhiteSpace(genericEventId))
                 return false;
@@ -1841,11 +2072,13 @@ namespace DeadCellsMultiplayerMod
                 {
                     case "roomDeath":
                         RunWithSuppressedBossCineSend(() => _ = new EnterRoomDeathBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomBeholder":
                     case "roomBerserk":
                         RunWithSuppressedBossCineSend(() => _ = new EnterRoomBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomCollectorBoss":
@@ -1865,14 +2098,17 @@ namespace DeadCellsMultiplayerMod
                             else
                                 _ = new MeetCollectorEnd(null);
                         });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomDooku":
                         RunWithSuppressedBossCineSend(() => _ = new EnterDookuBossRoom(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomGardenerBoss":
                         RunWithSuppressedBossCineSend(() => _ = new EnterRoomGardenerBoss(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomGiant":
@@ -1890,6 +2126,7 @@ namespace DeadCellsMultiplayerMod
 
                             _ = new EnterGiantRoom(hero);
                         });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomKingsHand":
@@ -1906,6 +2143,7 @@ namespace DeadCellsMultiplayerMod
 
                             _ = new EnterThroneRoom(hero);
                         });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomKingsHandAsKing":
@@ -1913,6 +2151,7 @@ namespace DeadCellsMultiplayerMod
                             return false;
 
                         RunWithSuppressedBossCineSend(() => _ = new EnterThroneRoomAsKing(hero));
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomMamaTick":
@@ -1929,10 +2168,12 @@ namespace DeadCellsMultiplayerMod
 
                             _ = new EnterRoomBoss(hero);
                         });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomQueen":
                         RunWithSuppressedBossCineSend(() => _ = new EnterRoomQueenBoss());
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
 
                     case "roomBehemoth":
@@ -1950,6 +2191,7 @@ namespace DeadCellsMultiplayerMod
 
                             _ = new EnterRoomBoss(hero);
                         });
+                        TrySnapHeroToBossCinePosition(hero, finalX, finalY, finalDir);
                         return true;
                 }
             }
@@ -2059,6 +2301,22 @@ namespace DeadCellsMultiplayerMod
             {
                 _suppressBossCineSendDepth--;
             }
+        }
+
+        private bool HasAppliedBossHeroTeleport(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return false;
+
+            return _appliedBossHeroTeleportLevels.Contains(levelId.Trim());
+        }
+
+        private void MarkBossHeroTeleportApplied(string? levelId)
+        {
+            if (string.IsNullOrWhiteSpace(levelId))
+                return;
+
+            _appliedBossHeroTeleportLevels.Add(levelId.Trim());
         }
 
         private void SuppressRemoteBossDeathCineIfNeeded()
@@ -2565,47 +2823,6 @@ namespace DeadCellsMultiplayerMod
         private static string NormalizeSkin(string? skin, string defaultSkin)
         {
             return string.IsNullOrWhiteSpace(skin) ? defaultSkin : skin.Replace("|", "/").Trim();
-        }
-
-        private bool RecreateClientKing(int slot)
-        {
-            if (slot < 0 || slot >= clients.Length)
-                return false;
-
-            var existing = clients[slot];
-            if (existing == null)
-                return false;
-
-            var x = rLastX[slot];
-            var y = rLastY[slot];
-            var dir = 1;
-            var targetable = true;
-            try
-            {
-                if (existing.spr != null)
-                {
-                    x = existing.spr.x;
-                    y = existing.spr.y;
-                }
-            }
-            catch
-            {
-            }
-
-            try { dir = existing.dir; } catch { }
-            try { targetable = existing._targetable; } catch { }
-
-            DisposeClientSlot(slot, clearIdentity: false);
-            var recreated = EnsureClientKingSlot(slot);
-            if (recreated == null)
-                return false;
-
-            try { recreated.setPosPixel(x, y); } catch { }
-            try { recreated.dir = dir; } catch { }
-            try { recreated._targetable = targetable; } catch { }
-            rLastX[slot] = x;
-            rLastY[slot] = y;
-            return true;
         }
 
         private void RecreateClientHead(int slot)

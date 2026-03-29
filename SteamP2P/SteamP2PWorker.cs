@@ -289,6 +289,36 @@ namespace DeadCellsMultiplayerMod
             return TryWriteCommand(command, out _);
         }
 
+        public bool TrySetRichPresence(string key, string value, out string error)
+        {
+            error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                error = "Steam rich presence key is empty";
+                return false;
+            }
+
+            var command = new WorkerCommand
+            {
+                Type = WorkerCommandTypes.SetRichPresence,
+                SendType = key,
+                Payload = value ?? string.Empty
+            };
+
+            return TryWriteCommand(command, out error);
+        }
+
+        public bool TryClearRichPresence(out string error)
+        {
+            var command = new WorkerCommand
+            {
+                Type = WorkerCommandTypes.ClearRichPresence
+            };
+
+            return TryWriteCommand(command, out error);
+        }
+
         public bool TryReadPacket(out SteamP2PWorkerPacket packet)
         {
             return _packets.TryDequeue(out packet);
@@ -886,6 +916,7 @@ namespace DeadCellsMultiplayerMod
 
             if (string.Equals(command.Type, WorkerCommandTypes.Stop, StringComparison.Ordinal))
             {
+                try { SteamFriends.ClearRichPresence(); } catch { }
                 if (hostLobbyId != 0UL)
                 {
                     try { SteamMatchmaking.LeaveLobby(new CSteamID(hostLobbyId)); } catch { }
@@ -904,6 +935,43 @@ namespace DeadCellsMultiplayerMod
                         try { SteamAPI.RunCallbacks(); } catch { }
                         Thread.Sleep(10);
                     }
+                }
+                return true;
+            }
+
+            if (string.Equals(command.Type, WorkerCommandTypes.SetRichPresence, StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(command.SendType))
+                    return false;
+
+                try
+                {
+                    SteamFriends.SetRichPresence(command.SendType, command.Payload ?? string.Empty);
+                }
+                catch (Exception ex)
+                {
+                    WriteEvent(eventWriter, new WorkerEvent
+                    {
+                        Type = WorkerEventTypes.Warning,
+                        Error = $"SetRichPresence failed: {ex.Message}"
+                    });
+                }
+                return true;
+            }
+
+            if (string.Equals(command.Type, WorkerCommandTypes.ClearRichPresence, StringComparison.Ordinal))
+            {
+                try
+                {
+                    SteamFriends.ClearRichPresence();
+                }
+                catch (Exception ex)
+                {
+                    WriteEvent(eventWriter, new WorkerEvent
+                    {
+                        Type = WorkerEventTypes.Warning,
+                        Error = $"ClearRichPresence failed: {ex.Message}"
+                    });
                 }
                 return true;
             }

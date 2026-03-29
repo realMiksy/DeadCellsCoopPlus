@@ -525,6 +525,7 @@ public sealed partial class NetNode : IDisposable
     private readonly List<PlayerDownState> _pendingPlayerDownStates = new();
     private readonly List<PlayerReviveRequest> _pendingPlayerReviveRequests = new();
     private readonly List<string> _pendingBossCineLevelIds = new();
+    private readonly List<BossHeroTeleportEvent> _pendingBossHeroTeleports = new();
     private readonly List<InterDoorEvent> _pendingInterDoorEvents = new();
     private readonly List<InterElevatorEvent> _pendingInterElevatorEvents = new();
     private readonly List<InterPressurePlateEvent> _pendingInterPressurePlateEvents = new();
@@ -604,6 +605,37 @@ public sealed partial class NetNode : IDisposable
     public static NetNode CreateSteamClient(ILogger log, ulong hostSteamId) => new(log, NetRole.Client, new CSteamID(hostSteamId), 0);
 
     internal SteamConnect.HostLobbyResult? HostLobbyResult => _steamBridge?.HostLobbyResult;
+
+    internal bool TrySetSteamHostRichPresence(ulong lobbyId)
+    {
+        if (!_useSteamTransport || _role != NetRole.Host || _steamBridge == null)
+            return false;
+
+        var connect = lobbyId == 0UL ? string.Empty : $"+connect_lobby {lobbyId}";
+        if (!_steamBridge.TrySetRichPresence("connect", connect, out var error))
+        {
+            if (!string.IsNullOrWhiteSpace(error))
+                _log.Warning("[NetNode] Steam worker set rich presence failed: {Error}", error);
+            return false;
+        }
+
+        return true;
+    }
+
+    internal bool TryClearSteamRichPresence()
+    {
+        if (!_useSteamTransport || _role != NetRole.Host || _steamBridge == null)
+            return false;
+
+        if (!_steamBridge.TryClearRichPresence(out var error))
+        {
+            if (!string.IsNullOrWhiteSpace(error))
+                _log.Warning("[NetNode] Steam worker clear rich presence failed: {Error}", error);
+            return false;
+        }
+
+        return true;
+    }
 
     private NetNode(ILogger log, NetRole role, IPEndPoint ep)
     {
@@ -1852,6 +1884,26 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("BOSSHEROTELE|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["BOSSHEROTELE|".Length..];
+            if (TryParseBossHeroTeleportPayload(payload, senderId, forceSenderId, out var ev))
+            {
+                lock (_sync)
+                {
+                    _pendingBossHeroTeleports.Add(ev);
+                    _hasRemote = true;
+                }
+
+                if (_role == NetRole.Host && senderId.HasValue)
+                {
+                    forwardLine =
+                        $"BOSSHEROTELE|{ev.UserId.ToString(CultureInfo.InvariantCulture)}|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}|{ev.Dir.ToString(CultureInfo.InvariantCulture)}\n";
+                }
+            }
+            return true;
+        }
+
         if (line.StartsWith("INTERBREAK|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["INTERBREAK|".Length..];
@@ -2077,6 +2129,7 @@ public sealed partial class NetNode : IDisposable
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
             _pendingBossCineLevelIds.Clear();
+            _pendingBossHeroTeleports.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
             _pendingInterDoorEvents.Clear();
@@ -2945,6 +2998,35 @@ public sealed partial class NetNode : IDisposable
             return false;
 
         ev = new InterTeleportEvent(x, y);
+        return true;
+    }
+
+    private static bool TryParseBossHeroTeleportPayload(string payload, int? senderId, bool forceSenderId, out BossHeroTeleportEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 4)
+            return false;
+
+        int userId;
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out userId))
+            userId = senderId ?? 0;
+        if (forceSenderId && senderId.HasValue)
+            userId = senderId.Value;
+        if (userId <= 0)
+            return false;
+
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+        if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dir))
+            return false;
+
+        ev = new BossHeroTeleportEvent(userId, x, y, dir);
         return true;
     }
 
@@ -4196,6 +4278,17 @@ public sealed partial class NetNode : IDisposable
         SendRaw($"BOSSCINE|{safe}");
     }
 
+    public void SendBossHeroTeleport(double x, double y, int dir)
+    {
+        if (!HasAnyConnection())
+            return;
+        if (ID <= 0)
+            return;
+
+        SendRaw(
+            $"BOSSHEROTELE|{ID.ToString(CultureInfo.InvariantCulture)}|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{dir.ToString(CultureInfo.InvariantCulture)}");
+    }
+
     public void SendInterDoor(int userId, double x, double y, string action, bool broken)
     {
         if (!HasAnyConnection())
@@ -4582,6 +4675,22 @@ public sealed partial class NetNode : IDisposable
         }
     }
 
+    public bool TryConsumeBossHeroTeleportEvents(out List<BossHeroTeleportEvent> events)
+    {
+        lock (_sync)
+        {
+            if (_pendingBossHeroTeleports.Count == 0)
+            {
+                events = new List<BossHeroTeleportEvent>();
+                return false;
+            }
+
+            events = new List<BossHeroTeleportEvent>(_pendingBossHeroTeleports);
+            _pendingBossHeroTeleports.Clear();
+            return events.Count > 0;
+        }
+    }
+
     public bool TryConsumePlayerDownStates(out List<PlayerDownState> states)
     {
         lock (_sync)
@@ -4964,6 +5073,7 @@ public sealed partial class NetNode : IDisposable
             _pendingMobDraws.Clear();
             _pendingExitReadyStates.Clear();
             _pendingBossCineLevelIds.Clear();
+            _pendingBossHeroTeleports.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
         }

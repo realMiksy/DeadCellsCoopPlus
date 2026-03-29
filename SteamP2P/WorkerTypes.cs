@@ -28,6 +28,8 @@ namespace DeadCellsMultiplayerMod
     {
         public const string Send = "send";
         public const string ClosePeer = "closePeer";
+        public const string SetRichPresence = "setRichPresence";
+        public const string ClearRichPresence = "clearRichPresence";
         public const string Stop = "stop";
     }
 
