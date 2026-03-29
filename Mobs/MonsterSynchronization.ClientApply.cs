@@ -27,16 +27,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (!preserveLocalMotion)
             {
+                var syncY = ClientSyncVerticalPosition;
+                try
+                {
+                    if (!self.hasGravity)
+                        syncY = true;
+                }
+                catch
+                {
+                }
+
                 var currentX = GetWorldX(self);
                 var currentY = GetWorldY(self);
                 var lerpedX = currentX + (target.X - currentX) * ClientInterpolationAlpha;
-                var lerpedY = ClientSyncVerticalPosition
+                var lerpedY = syncY
                     ? currentY + (target.Y - currentY) * ClientInterpolationAlpha
                     : currentY;
 
                 try
                 {
-                    if (ClientSyncVerticalPosition)
+                    if (syncY)
                         self.setPosPixel(lerpedX, lerpedY);
                     else
                         SetWorldXKeepingY(self, lerpedX);
@@ -46,7 +56,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     if (self.spr != null)
                     {
                         self.spr.x = lerpedX;
-                        if (ClientSyncVerticalPosition)
+                        if (syncY)
                             self.spr.y = lerpedY;
                     }
                 }
@@ -55,13 +65,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     self.dx = 0;
                     self.bdx = 0;
-                    if (ClientSyncVerticalPosition)
+                    if (syncY)
                     {
                         self.dy = 0;
                         self.bdy = 0;
                         self.fallStartY = lerpedY;
                     }
-                    self.hasGravity = true;
                 }
                 catch
                 {
