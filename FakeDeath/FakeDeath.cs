@@ -1225,6 +1225,16 @@ namespace DeadCellsMultiplayerMod
 
         private string GetCurrentLevelId()
         {
+            try
+            {
+                var currentLevelId = me?._level?.map?.id?.ToString();
+                if (!string.IsNullOrWhiteSpace(currentLevelId))
+                    return currentLevelId.Trim();
+            }
+            catch
+            {
+            }
+
             if (!string.IsNullOrWhiteSpace(levelId))
                 return levelId.Trim();
 
