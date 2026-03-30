@@ -537,10 +537,10 @@ public sealed partial class NetNode : IDisposable
     private List<MobStateSnapshot> _pendingMobStates = new();
     private List<MobMoveSnapshot> _pendingMobMoves = new();
     private List<MobChargeSnapshot> _pendingMobCharges = new();
-    private readonly List<MobHit> _pendingMobHits = new();
-    private readonly List<MobDie> _pendingMobDies = new();
-    private readonly List<MobAttack> _pendingMobAttacks = new();
-    private readonly List<MobDraw> _pendingMobDraws = new();
+    private List<MobHit> _pendingMobHits = new();
+    private List<MobDie> _pendingMobDies = new();
+    private List<MobAttack> _pendingMobAttacks = new();
+    private List<MobDraw> _pendingMobDraws = new();
     private readonly List<ExitReadyState> _pendingExitReadyStates = new();
     private readonly List<PlayerDownState> _pendingPlayerDownStates = new();
     private readonly List<PlayerReviveRequest> _pendingPlayerReviveRequests = new();
@@ -4560,15 +4560,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobStates.Count == 0)
-            {
-                snapshot = new List<MobStateSnapshot>();
-                return false;
-            }
-
-            snapshot = new List<MobStateSnapshot>(_pendingMobStates);
-            _pendingMobStates.Clear();
-            return snapshot.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobStates, out snapshot);
         }
     }
 
@@ -4576,15 +4568,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobMoves.Count == 0)
-            {
-                moves = new List<MobMoveSnapshot>();
-                return false;
-            }
-
-            moves = new List<MobMoveSnapshot>(_pendingMobMoves);
-            _pendingMobMoves.Clear();
-            return moves.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobMoves, out moves);
         }
     }
 
@@ -4592,15 +4576,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobCharges.Count == 0)
-            {
-                charges = new List<MobChargeSnapshot>();
-                return false;
-            }
-
-            charges = new List<MobChargeSnapshot>(_pendingMobCharges);
-            _pendingMobCharges.Clear();
-            return charges.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobCharges, out charges);
         }
     }
 
@@ -4608,15 +4584,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobHits.Count == 0)
-            {
-                hits = new List<MobHit>();
-                return false;
-            }
-
-            hits = new List<MobHit>(_pendingMobHits);
-            _pendingMobHits.Clear();
-            return hits.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobHits, out hits);
         }
     }
 
@@ -4624,15 +4592,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobDies.Count == 0)
-            {
-                dies = new List<MobDie>();
-                return false;
-            }
-
-            dies = new List<MobDie>(_pendingMobDies);
-            _pendingMobDies.Clear();
-            return dies.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobDies, out dies);
         }
     }
 
@@ -4640,15 +4600,7 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobAttacks.Count == 0)
-            {
-                attacks = new List<MobAttack>();
-                return false;
-            }
-
-            attacks = new List<MobAttack>(_pendingMobAttacks);
-            _pendingMobAttacks.Clear();
-            return attacks.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobAttacks, out attacks);
         }
     }
 
@@ -4656,16 +4608,21 @@ public sealed partial class NetNode : IDisposable
     {
         lock (_sync)
         {
-            if (_pendingMobDraws.Count == 0)
-            {
-                draws = new List<MobDraw>();
-                return false;
-            }
-
-            draws = new List<MobDraw>(_pendingMobDraws);
-            _pendingMobDraws.Clear();
-            return draws.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingMobDraws, out draws);
         }
+    }
+
+    private static bool TryConsumePendingListLocked<T>(ref List<T> pending, out List<T> snapshot)
+    {
+        if (pending.Count == 0)
+        {
+            snapshot = new List<T>();
+            return false;
+        }
+
+        snapshot = pending;
+        pending = new List<T>(snapshot.Count);
+        return true;
     }
 
     public bool TryConsumeExitReadyStates(out List<ExitReadyState> states)

@@ -21,10 +21,14 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientDrawKeepAliveSeconds = 0.9;
         private const double ClientInterpolationAlpha = 0.62;
         private const double ClientAiLockSeconds = 0.3;
+        private const double ClientAiLockRefreshBaseSeconds = 0.09;
+        private const double ClientAiLockRefreshMaxSeconds = 0.16;
         private const double ClientNetworkAttackMotionPreserveSeconds = 0.05;
         private const double ClientBossNetworkAttackMotionPreserveSeconds = 0.85;
         private const double ClientBossNetworkAttackAiPreserveSeconds = 1.2;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
+        private const double HostRetargetRefreshBaseSeconds = 0.05;
+        private const double HostRetargetRefreshMaxSeconds = 0.16;
         private const double ClientMobHitReportMinIntervalSeconds = 0.05;
         private const double ClientAnimSpeedEpsilon = 0.05;
         private static readonly bool ClientSyncVerticalPosition = false;
