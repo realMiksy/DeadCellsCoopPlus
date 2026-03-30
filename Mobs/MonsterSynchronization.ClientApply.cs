@@ -22,6 +22,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return;
             }
 
+            if (!ShouldProcessClientVisualState(self, localIndex))
+                return;
+
             var preserveLocalMotion = (HasLocalQueuedOrChargingSkill(self) && ShouldPreserveClientAttackMotion(self))
                 || IsWithinClientNetworkAttackMotionPreserveWindow(self, localIndex);
 
@@ -107,6 +110,26 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private static bool ShouldProcessClientVisualState(Mob mob, int localIndex)
+        {
+            if (mob == null)
+                return false;
+            if (BossSyncHelpers.IsBossMob(mob))
+                return true;
+            if (HasValidLivingPlayerCombatTarget(mob))
+                return true;
+            if (IsWithinClientNetworkAttackMotionPreserveWindow(mob, localIndex))
+                return true;
+
+            if (TryGetMobVisibilityState(mob, out var isOnScreen, out var isOutOfGame, out var onScreenRecent))
+            {
+                if (isOnScreen || !isOutOfGame || onScreenRecent > 0.0)
+                    return true;
+            }
+
+            return TryGetNearestPlayerDistanceSq(mob, out var distanceSq) && distanceSq <= MobSyncMidDistanceSq;
+        }
+
         private static void ApplyAuthoritativeLifeState(Mob mob, int targetLife, int targetMaxLife)
         {
             if (mob == null)
@@ -170,6 +193,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 shouldApplyAnimThisFrame = ShouldApplyClientAnimationForFrameLocked(self, localIndex);
             }
+
+            if (!ShouldProcessClientVisualState(self, localIndex))
+                return;
 
             var responsiveDir = ComputeResponsiveFacingDir(self, target);
             if (responsiveDir != 0)
