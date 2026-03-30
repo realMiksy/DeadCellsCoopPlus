@@ -4,10 +4,13 @@ using System.Globalization;
 using System.Diagnostics;
 using System.Text;
 using dc.en;
+using dc.hl.types;
+using dc.pr;
 using dc.tool.mainSkills;
 using DeadCellsMultiplayerMod.Ghost;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using Hashlink.Virtuals;
+using HaxeProxy.Runtime;
 using ModCore.Utilities;
 
 namespace DeadCellsMultiplayerMod;
@@ -48,13 +51,13 @@ public partial class ModEntry
 
     private void Hook_DiveAttack_onOwnerLand(Hook_DiveAttack.orig_onOwnerLand orig, DiveAttack self, double high)
     {
-        if (!IsDiveAttackHookContextValid(self, out _))
+        if (!IsDiveAttackHookContextValid(self, out var hero))
             return;
 
         var wasDiving = IsDiveReallyActive(self);
         try
         {
-            orig(self, high);
+            ExecuteDiveAttackLand(orig, self, high, hero!);
         }
         catch (Exception ex)
         {
@@ -94,6 +97,108 @@ public partial class ModEntry
             return false;
         }
 
+        try
+        {
+            if (hero._level == null)
+                return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ExecuteDiveAttackLand(Hook_DiveAttack.orig_onOwnerLand orig, DiveAttack self, double high, Hero hero)
+    {
+        Level? level;
+        try
+        {
+            level = hero._level;
+        }
+        catch
+        {
+            level = null;
+        }
+
+        if (level == null)
+            return;
+
+        WithSanitizedQuadElements(level, () => orig(self, high));
+    }
+
+    private static void WithSanitizedQuadElements(Level level, Action action)
+    {
+        if (action == null)
+            return;
+
+        ArrayObj? original = null;
+        ArrayObj? sanitized = null;
+        var swapped = false;
+        try
+        {
+            original = level.listCurrentQuadElements;
+            if (!TrySanitizeQuadElements(original, out sanitized))
+            {
+                action();
+                return;
+            }
+
+            level.listCurrentQuadElements = sanitized!;
+            swapped = true;
+            action();
+        }
+        finally
+        {
+            if (swapped && sanitized != null)
+            {
+                try
+                {
+                    if (ReferenceEquals(level.listCurrentQuadElements, sanitized))
+                        level.listCurrentQuadElements = original!;
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static bool TrySanitizeQuadElements(ArrayObj? source, out ArrayObj? sanitized)
+    {
+        sanitized = null;
+        if (source == null)
+            return false;
+
+        var needsSanitizing = false;
+        var arr = ArrayUtils.CreateDyn();
+        for (var i = 0; i < source.length; i++)
+        {
+            object? entry;
+            try
+            {
+                entry = source.getDyn(i);
+            }
+            catch
+            {
+                needsSanitizing = true;
+                continue;
+            }
+
+            if (entry is dc.Entity entity)
+            {
+                arr.array.pushDyn(entity);
+                continue;
+            }
+
+            needsSanitizing = true;
+        }
+
+        if (!needsSanitizing)
+            return false;
+
+        sanitized = (ArrayObj)arr.array;
         return true;
     }
 

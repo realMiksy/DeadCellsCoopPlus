@@ -30,6 +30,7 @@ public class InteractionSync :
     private const double SwitchBossRunePosTolerance = 32.0;
     private const double ElevatorPosTolerance = 48.0;
     private const double PortalPosTolerance = 48.0;
+    private const double TileSizePx = 24.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
     private const int DoorCloseDelayMs = 250;
@@ -832,10 +833,59 @@ public class InteractionSync :
         var byPos = FindInteractByPos<Elevator>(level, x, y, ElevatorPosTolerance);
         if (byPos != null)
             return byPos;
+
+        var byTrack = FindElevatorByTrackBounds(level, x, y);
+        if (byTrack != null)
+            return byTrack;
+
         var nearest = FindNearestByPos<Elevator>(level, x, y, ElevatorPosTolerance * ElevatorPosTolerance * 4);
         if (nearest != null)
             return nearest;
         return FindElevatorInTriggers(level, x, y);
+    }
+
+    private static Elevator? FindElevatorByTrackBounds(Level level, double x, double y)
+    {
+        if (level?.entities == null)
+            return null;
+
+        Elevator? nearest = null;
+        double nearestSq = double.MaxValue;
+        var entities = level.entities;
+        for (var i = 0; i < entities.length; i++)
+        {
+            var elevator = entities.getDyn(i) as Elevator;
+            if (elevator == null)
+                continue;
+
+            try
+            {
+                var leftPx = elevator.xLeft * TileSizePx - ElevatorPosTolerance;
+                var rightPx = (elevator.xRight + 1) * TileSizePx + ElevatorPosTolerance;
+                var topPx = elevator.yTop * TileSizePx - ElevatorPosTolerance;
+                var bottomPx = (elevator.yBottom + 1) * TileSizePx + ElevatorPosTolerance;
+
+                if (x < leftPx || x > rightPx || y < topPx || y > bottomPx)
+                    continue;
+
+                var anchorX = elevator.spr?.x ?? ((elevator.cx + elevator.xr) * TileSizePx);
+                var anchorY = elevator.spr?.y ?? ((elevator.cy + elevator.yr) * TileSizePx);
+                var dx = anchorX - x;
+                var dy = anchorY - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestSq)
+                {
+                    nearestSq = dSq;
+                    nearest = elevator;
+                }
+            }
+            catch
+            {
+                // ignore bad elevator state
+            }
+        }
+
+        return nearest;
     }
 
     private static Elevator? FindElevatorInTriggers(Level level, double x, double y)

@@ -178,6 +178,9 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
             if (localHero == null)
                 return;
 
+            if (!IsRemoteDiveReplayContextValid(localHero))
+                return;
+
             var dive = EnsureRemoteDiveAttack(localHero, forceRecreate: true);
             if (dive == null)
                 return;
@@ -207,6 +210,9 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         private DiveAttack? EnsureRemoteDiveAttack(Hero localHero, bool forceRecreate)
         {
+            if (!IsRemoteDiveReplayContextValid(localHero))
+                return null;
+
             if (forceRecreate)
                 DisposeRemoteDiveAttack();
 
@@ -243,6 +249,9 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
 
         private void ExecuteRemoteDive(Hero localHero, DiveAttack dive, double high, bool startOnly)
         {
+            if (!IsRemoteDiveReplayContextValid(localHero))
+                return;
+
             var cooldownSnapshot = CaptureCooldown(localHero.cd, DiveAttackCooldownKey);
             var controlLockSnapshot = CaptureCooldown(localHero.cd, HeroControlLockCooldownKey);
             var skillLockSnapshot = CaptureCooldown(localHero.cd, HeroSkillLockCooldownKey);
@@ -281,6 +290,47 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
                 RestoreCooldown(localHero.cd, DiveAttackCooldownKey, cooldownSnapshot);
                 RestoreLocalHeroDiveState(localHero, heroSnapshot);
             }
+        }
+
+        private bool IsRemoteDiveReplayContextValid(Hero localHero)
+        {
+            if (localHero == null || destroyed || _level == null)
+                return false;
+
+            try
+            {
+                if (localHero.destroyed)
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            dc.pr.Level? localLevel;
+            try
+            {
+                localLevel = localHero._level;
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (localLevel == null || !ReferenceEquals(localLevel, _level))
+                return false;
+
+            try
+            {
+                if (localLevel.listCurrentQuadElements == null)
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+
+            return spr != null;
         }
 
         private readonly struct LocalHeroDiveStateSnapshot
