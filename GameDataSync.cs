@@ -29,6 +29,9 @@ namespace DeadCellsMultiplayerMod
         static public int Seed;
         private static readonly bool EnableStoryManagerSync = false;
 
+        // When false, host does not send PROGRESS (packed user) to clients.
+        private static readonly bool EnableSendHostUserProgress = false;
+
         static public virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ _isTwitch;
         static public bool _isCustom;
         static public bool _mode;
@@ -1115,6 +1118,9 @@ namespace DeadCellsMultiplayerMod
         public static void SendProgressSync(User user, NetNode? net)
         {
             if (user == null || net == null || !net.IsHost || !net.IsAlive)
+                return;
+
+            if (!EnableSendHostUserProgress)
                 return;
 
             var payload = GetCurrentProgressPayload(user);
