@@ -38,7 +38,7 @@ namespace DeadCellsMultiplayerMod
         private static NetRole _multiplayerSaveMenuReturnRole = NetRole.None;
         private static int? _multiplayerSaveImportTargetSlot;
         private static int? _preferredMultiplayerSaveSlot;
-        private static bool _multiplayerSaveInputDebugLogged;
+        private static ControlLabel? _multiplayerSaveImportControlLabel;
 
         private static void InitializeMultiplayerSaveHooks()
         {
@@ -83,7 +83,7 @@ namespace DeadCellsMultiplayerMod
         {
             _multiplayerSaveMenuKind = kind;
             _multiplayerSaveMenuOpening = true;
-            _multiplayerSaveInputDebugLogged = false;
+            _multiplayerSaveImportControlLabel = null;
 
             try
             {
@@ -108,7 +108,7 @@ namespace DeadCellsMultiplayerMod
             _multiplayerSaveMenuKind = MultiplayerSaveMenuKind.None;
             _multiplayerSaveMenuOpening = false;
             _multiplayerSaveImportTargetSlot = null;
-            _multiplayerSaveInputDebugLogged = false;
+            _multiplayerSaveImportControlLabel = null;
 
             orig(self);
 
@@ -221,7 +221,7 @@ namespace DeadCellsMultiplayerMod
             finally
             {
                 _multiplayerSaveMenuOpening = false;
-                _multiplayerSaveInputDebugLogged = false;
+                _multiplayerSaveImportControlLabel = null;
             }
         }
 
@@ -229,16 +229,8 @@ namespace DeadCellsMultiplayerMod
         {
             if (_multiplayerSaveMenuKind == MultiplayerSaveMenuKind.MultiplayerSlots)
             {
-                LogMultiplayerSaveInputBindingsOnce(self);
-
                 var copyActionPressed = IsActionPressed(self?.controller, CopyActionCode);
                 var literalXPressed = IsLiteralXPressed();
-
-                if (copyActionPressed)
-                    _log?.Warning("[NetMod] Multiplayer save copy action detected.");
-
-                if (literalXPressed)
-                    _log?.Warning("[NetMod] Multiplayer save literal X key detected.");
 
                 if ((copyActionPressed || literalXPressed) &&
                     TryBeginMultiplayerSaveImportSelection(self))
@@ -429,14 +421,10 @@ namespace DeadCellsMultiplayerMod
             if (_multiplayerSaveMenuKind != MultiplayerSaveMenuKind.MultiplayerSlots)
                 return false;
             if (!TryGetSelectedSaveSlot(self, out var targetSlot))
-            {
-                _log?.Warning("[NetMod] Copy input detected but selected multiplayer slot could not be resolved.");
                 return false;
-            }
 
             _multiplayerSaveImportTargetSlot = targetSlot;
             _preferredMultiplayerSaveSlot = targetSlot;
-            _log?.Warning("[NetMod] Switching multiplayer save UI to original saves for target slot {Slot}.", targetSlot + 1);
             SwitchSaveChoiceStore(self, MultiplayerSaveMenuKind.OriginalSourceSelection);
             return true;
         }
@@ -498,31 +486,6 @@ namespace DeadCellsMultiplayerMod
             return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
         }
 
-        private static void LogMultiplayerSaveInputBindingsOnce(SaveChoice self)
-        {
-            if (_multiplayerSaveInputDebugLogged)
-                return;
-
-            _multiplayerSaveInputDebugLogged = true;
-
-            var controller = self?.controller?.parent;
-            if (controller == null)
-            {
-                _log?.Warning("[NetMod] Multiplayer save menu input debug: controller is null.");
-                return;
-            }
-
-            _log?.Warning(
-                "[NetMod] Multiplayer save input active. Copy action bindings: padA={PadA}, padB={PadB}, padC={PadC}, primary={Primary}, secondary={Secondary}, third={Third}. Literal X key code={LiteralX}.",
-                GetBinding(controller.get_bindings().padA, CopyActionCode),
-                GetBinding(controller.get_bindings().padB, CopyActionCode),
-                GetBinding(controller.get_bindings().padC, CopyActionCode),
-                GetBinding(controller.get_bindings().primary, CopyActionCode),
-                GetBinding(controller.get_bindings().secondary, CopyActionCode),
-                GetBinding(controller.get_bindings().third, CopyActionCode),
-                LiteralKeyboardXKeyCode);
-        }
-
         private static void EnsureValidSaveChoiceSelection(SaveChoice self)
         {
             var saves = self?.saves;
@@ -559,18 +522,25 @@ namespace DeadCellsMultiplayerMod
             if (self?.fControlLabel == null)
                 return;
 
-            var existing = FindImportControlLabel(self);
+            var existing = _multiplayerSaveImportControlLabel;
+            if (existing == null || existing.parent != self.fControlLabel)
+                existing = FindImportControlLabel(self);
+
             if (existing != null)
             {
+                _multiplayerSaveImportControlLabel = existing;
+                RemoveDuplicateImportControlLabels(self, existing);
                 existing.set_visible(true);
                 existing.tfLabel?.set_text(MakeHLString(MultiplayerSaveImportLabel));
                 existing.reflow();
+                self.fControlLabel.reflow();
                 return;
             }
 
             var importLabel = new ControlLabel(CreateActionArray(CopyActionCode), MakeHLString(MultiplayerSaveImportLabel), null, null, null, null);
             importLabel.set_visible(true);
             importLabel.reflow();
+            _multiplayerSaveImportControlLabel = importLabel;
             self.fControlLabel.addChild(importLabel);
             self.fControlLabel.reflow();
         }
@@ -592,6 +562,25 @@ namespace DeadCellsMultiplayerMod
             }
 
             return null;
+        }
+
+        private static void RemoveDuplicateImportControlLabels(SaveChoice self, ControlLabel keep)
+        {
+            var children = self?.fControlLabel?.children;
+            if (children == null)
+                return;
+
+            for (var i = children.length - 1; i >= 0; i--)
+            {
+                if (children.array[i] is not ControlLabel label || ReferenceEquals(label, keep))
+                    continue;
+
+                var rawText = label.tfLabel?.rawText?.ToString();
+                if (!string.Equals(rawText, MultiplayerSaveImportLabel, StringComparison.Ordinal))
+                    continue;
+
+                self.fControlLabel.removeChild(label);
+            }
         }
 
         private static void SetControlLabelVisible(SaveChoice self, int index, bool visible)
@@ -755,10 +744,6 @@ namespace DeadCellsMultiplayerMod
                 EnsureMultiplayerSaveFolderExists();
                 var targetRelativePath = GetMultiplayerSaveRelativeFilePath(targetSlot);
                 dc.tool.File.Class.saveBytes.Invoke(MakeHLString(targetRelativePath), sourceBytes);
-                _log?.Information(
-                    "[NetMod] Copied original save slot {SourceSlot} into multiplayer slot {TargetSlot}",
-                    sourceSlot + 1,
-                    targetSlot + 1);
                 return true;
             }
             catch (Exception ex)
