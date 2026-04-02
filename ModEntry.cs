@@ -1309,6 +1309,7 @@ namespace DeadCellsMultiplayerMod
 
             _debugExplorerRevealAppliedSignature = string.Empty;
             _nextDebugExplorerRevealRetryTick = 0;
+            _debugExplorerRevealAllCount = 0;
         }
 
 

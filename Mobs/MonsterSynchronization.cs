@@ -382,8 +382,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 ConsumeIncomingMobHits(net);
                 if (hasTrackedMobs)
                 {
-                    TrySendClientMobDraws(net);
-                    TrySendClientMobStateDeltaBatchPreUpdate(net);
+                    if (!TryCaptureTrackedMobsForBatch(out var trackedMobCount))
+                        return;
+                    var now = Stopwatch.GetTimestamp();
+                    TrySendClientMobDraws(net, now, trackedMobCount);
+                    TrySendClientMobStateDeltaBatchPreUpdate(net, now, trackedMobCount);
                 }
             }
         }
@@ -927,23 +930,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 net.SendMobStates(s_batchSnapshotsScratch);
         }
 
-        private static void TrySendClientMobStateDeltaBatchPreUpdate(NetNode net)
+        private static void TrySendClientMobStateDeltaBatchPreUpdate(NetNode net, long now, int trackedMobCount)
         {
             if (!IsClient(net))
-                return;
-
-            var trackedMobCount = 0;
-            lock (Sync)
-            {
-                trackedMobCount = trackedMobs.Count;
-            }
-
-            if (trackedMobCount <= 0)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-
-            if (!TryCaptureTrackedMobsForBatch(out trackedMobCount))
                 return;
 
             var affectResendTicks = (long)(Stopwatch.Frequency * ComputeAdaptiveAffectResendSeconds(s_batchMobsScratch.Count));
@@ -3847,22 +3836,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
-        private static void TrySendClientMobDraws(NetNode net)
+        private static void TrySendClientMobDraws(NetNode net, long now, int trackedMobCount)
         {
-            var trackedMobCount = 0;
-            lock (Sync)
-            {
-                trackedMobCount = trackedMobs.Count;
-            }
-
-            if (trackedMobCount <= 0)
+            if (!IsClient(net))
                 return;
 
-            var now = Stopwatch.GetTimestamp();
             var keepAliveTicks = (long)(Stopwatch.Frequency * ClientDrawKeepAliveSeconds);
-            if (!TryCaptureTrackedMobsForBatch(out _))
-                return;
-
             s_drawsScratch.Clear();
             var hero = ModEntry.me ?? ModCore.Modules.Game.Instance?.HeroInstance;
             for (int i = 0; i < s_batchMobsScratch.Count; i++)
