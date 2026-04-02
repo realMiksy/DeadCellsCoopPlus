@@ -128,7 +128,38 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     return true;
             }
 
-            return TryGetNearestPlayerDistanceSq(mob, out var distanceSq) && distanceSq <= MobSyncDistanceSq;
+            if (!TryGetNearestPlayerDistanceSq(mob, out var distanceSq) || distanceSq > MobSyncDistanceSq)
+                return false;
+
+            if (ShouldStaggerFarClientVisualInterpolation(mob, localIndex))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>Spreads distance-only visual work across frames when the mob is far / off-screen.</summary>
+        private static bool ShouldStaggerFarClientVisualInterpolation(Mob mob, int localIndex)
+        {
+            if (mob == null)
+                return false;
+
+            try
+            {
+                if (!TryGetMobSyncId(mob, out var syncId))
+                    syncId = localIndex;
+
+                var level = mob._level;
+                if (level == null)
+                    return false;
+
+                var phase = (int)System.Math.Floor(level.ftime * 45.0) % ClientVisualInterpolationStaggerPhases;
+                var bucket = ((syncId % ClientVisualInterpolationStaggerPhases) + ClientVisualInterpolationStaggerPhases) % ClientVisualInterpolationStaggerPhases;
+                return bucket != phase;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void ApplyAuthoritativeLifeState(Mob mob, int targetLife, int targetMaxLife)

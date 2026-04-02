@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 
 namespace DeadCellsMultiplayerMod;
 
@@ -10,9 +12,15 @@ internal static class MobWireCodec
     private const char EntrySep = ';';
     private const char EventSep = '\u00A7';
 
+    /// <summary>Hard cap on mob state entries per line (see MobsSync optimization plan).</summary>
+    internal const int MaxMobStateSnapshotsPerWireLine = 96;
+
+    private static readonly ThreadLocal<StringBuilder> MobLineBuilder = new(() => new StringBuilder(4096));
+
     public static string BuildMobStatesLine(IReadOnlyList<NetNode.MobStateSnapshot> states)
     {
-        var sb = new StringBuilder(32 + (states?.Count ?? 0) * 56);
+        var sb = MobLineBuilder.Value!;
+        sb.Clear();
         sb.Append("MOBSTATE|");
         AppendJoinedStates(sb, states);
         sb.Append('\n');
@@ -21,11 +29,16 @@ internal static class MobWireCodec
 
     public static string BuildMobMovesLine(IReadOnlyList<NetNode.MobMoveSnapshot> moves)
     {
-        var sb = new StringBuilder(24 + (moves?.Count ?? 0) * 40);
+        var sb = MobLineBuilder.Value!;
+        sb.Clear();
         sb.Append("MOBMOVE|");
         if (moves != null)
         {
-            for (int i = 0; i < moves.Count; i++)
+            var limit = moves.Count;
+            if (limit > MaxMobStateSnapshotsPerWireLine)
+                limit = MaxMobStateSnapshotsPerWireLine;
+
+            for (int i = 0; i < limit; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -48,11 +61,16 @@ internal static class MobWireCodec
 
     public static string BuildMobChargesLine(IReadOnlyList<NetNode.MobChargeSnapshot> charges)
     {
-        var sb = new StringBuilder(24 + (charges?.Count ?? 0) * 24);
+        var sb = MobLineBuilder.Value!;
+        sb.Clear();
         sb.Append("MOBCHARGE|");
         if (charges != null)
         {
-            for (int i = 0; i < charges.Count; i++)
+            var limit = charges.Count;
+            if (limit > MaxMobStateSnapshotsPerWireLine)
+                limit = MaxMobStateSnapshotsPerWireLine;
+
+            for (int i = 0; i < limit; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -93,11 +111,16 @@ internal static class MobWireCodec
 
     public static string BuildMobEventsLine(IReadOnlyList<NetNode.MobEventUpdate> updates)
     {
-        var sb = new StringBuilder(24 + (updates?.Count ?? 0) * 52);
+        var sb = MobLineBuilder.Value!;
+        sb.Clear();
         sb.Append("MOBEVENT|");
         if (updates != null)
         {
-            for (int i = 0; i < updates.Count; i++)
+            var limit = updates.Count;
+            if (limit > MaxMobStateSnapshotsPerWireLine)
+                limit = MaxMobStateSnapshotsPerWireLine;
+
+            for (int i = 0; i < limit; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -139,11 +162,16 @@ internal static class MobWireCodec
 
     public static string BuildMobDrawLine(IReadOnlyList<NetNode.MobDraw> draws)
     {
-        var sb = new StringBuilder(24 + (draws?.Count ?? 0) * 20);
+        var sb = MobLineBuilder.Value!;
+        sb.Clear();
         sb.Append("MOBDRAW|");
         if (draws != null)
         {
-            for (int i = 0; i < draws.Count; i++)
+            var limit = draws.Count;
+            if (limit > MaxMobStateSnapshotsPerWireLine)
+                limit = MaxMobStateSnapshotsPerWireLine;
+
+            for (int i = 0; i < limit; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -174,7 +202,11 @@ internal static class MobWireCodec
         if (states == null)
             return;
 
-        for (int i = 0; i < states.Count; i++)
+        var limit = states.Count;
+        if (limit > MaxMobStateSnapshotsPerWireLine)
+            limit = MaxMobStateSnapshotsPerWireLine;
+
+        for (int i = 0; i < limit; i++)
         {
             if (i > 0)
                 sb.Append(EntrySep);

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
 using DeadCellsMultiplayerMod.Interaction;
+using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using Serilog;
 using Serilog.Core;
 using Steamworks;
@@ -1642,6 +1643,33 @@ public sealed partial class NetNode : IDisposable
             return true;
         }
 
+        if (line.StartsWith("MOBSTATE2|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["MOBSTATE2|".Length..].TrimEnd('\r', '\n');
+            var tParse = Stopwatch.GetTimestamp();
+            var parsedStates = new List<MobStateSnapshot>();
+            if (MobWireBinary.TryParseMobStatesBase64(payload, parsedStates))
+            {
+                MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - tParse);
+                lock (_sync)
+                {
+                    if (_role == NetRole.Host)
+                    {
+                        if (parsedStates.Count > 0)
+                            _pendingMobStates.AddRange(parsedStates);
+                    }
+                    else
+                    {
+                        _pendingMobStates = parsedStates;
+                    }
+
+                    _hasRemote = true;
+                }
+            }
+
+            return true;
+        }
+
         if (line.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["MOBSTATE|".Length..];
@@ -2447,9 +2475,13 @@ public sealed partial class NetNode : IDisposable
 
     private static List<MobStateSnapshot> ParseMobStatesPayload(string payload)
     {
+        var t0 = Stopwatch.GetTimestamp();
         var states = new List<MobStateSnapshot>();
         if (string.IsNullOrWhiteSpace(payload))
+        {
+            MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
             return states;
+        }
 
         var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
         foreach (var entry in entries)
@@ -2477,6 +2509,7 @@ public sealed partial class NetNode : IDisposable
             states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload));
         }
 
+        MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
         return states;
     }
 
@@ -3330,6 +3363,7 @@ public sealed partial class NetNode : IDisposable
                trimmed.StartsWith("HEADANIM|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("HP|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBSTATE|", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("MOBSTATE2|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBMOVE|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBCHARGE|", StringComparison.OrdinalIgnoreCase) ||
                trimmed.StartsWith("MOBDRAW|", StringComparison.OrdinalIgnoreCase);
@@ -3982,8 +4016,17 @@ public sealed partial class NetNode : IDisposable
         if (states == null || states.Count == 0)
             return;
 
-        var line = MobWireCodec.BuildMobStatesLine(states);
-        _ = SendLineSafe(line);
+        if (MobWireBinary.UseBinaryWire && MobWireBinary.TryBuildMobStatesBinary(states, out var bin) && bin != null)
+        {
+            var line = "MOBSTATE2|" + Convert.ToBase64String(bin) + "\n";
+            _ = SendLineSafe(line);
+            return;
+        }
+
+        var t0 = Stopwatch.GetTimestamp();
+        var textLine = MobWireCodec.BuildMobStatesLine(states);
+        MobSyncProfiler.AddWireEncode(Stopwatch.GetTimestamp() - t0);
+        _ = SendLineSafe(textLine);
     }
 
     public void SendMobMoves(IReadOnlyList<MobMoveSnapshot> moves)

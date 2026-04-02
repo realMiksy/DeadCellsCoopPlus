@@ -87,6 +87,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const string MobSyncWorkerDisableEnv = "DCCM_MOB_SYNC_WORKER";
         private const string MobSyncAsyncInProcEnv = "DCCM_MOB_SYNC_ASYNC_INPROC";
 
+        private static double s_distanceSqCacheFrameKey = double.NaN;
+        private static readonly Dictionary<int, double> s_localIndexToNearestDistanceSq = new();
+
         private static double ElapsedSeconds(long startTimestamp, long endTimestamp) =>
             Stopwatch.GetElapsedTime(startTimestamp, endTimestamp).TotalSeconds;
 
@@ -376,7 +379,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 ConsumeIncomingMobDies(net);
                 ConsumeIncomingMobHits(net);
                 if (hasTrackedMobs)
+                {
+                    var t0 = Stopwatch.GetTimestamp();
                     TrySendHostMobStateDeltaBatchPreUpdate(net);
+                    MobSyncProfiler.AddFrameBatch(Stopwatch.GetTimestamp() - t0);
+                }
+
+                MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
                 return;
             }
 
@@ -389,10 +398,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (hasTrackedMobs)
                 {
                     if (!TryCaptureTrackedMobsForBatch(out var trackedMobCount))
+                    {
+                        MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
                         return;
+                    }
+
                     var now = Stopwatch.GetTimestamp();
+                    var t0 = Stopwatch.GetTimestamp();
                     TrySendClientMobBatchesNetFrame(net, now);
+                    MobSyncProfiler.AddFrameBatch(Stopwatch.GetTimestamp() - t0);
                 }
+
+                MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
             }
         }
 
@@ -501,7 +518,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (IsClient(net) && IsSyncMob(self))
             {
                 orig(self);
+                var t0 = Stopwatch.GetTimestamp();
                 ApplyInterpolatedState(self);
+                MobSyncProfiler.AddFixedApply(Stopwatch.GetTimestamp() - t0);
                 return;
             }
 
@@ -517,7 +536,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 orig(self);
                 if (IsClient(net) && IsSyncMob(self))
+                {
+                    var t0 = Stopwatch.GetTimestamp();
                     ApplyClientAnimationStateBeforeUpdate(self);
+                    MobSyncProfiler.AddPostAnim(Stopwatch.GetTimestamp() - t0);
+                }
+
                 return;
             }
 
@@ -1220,6 +1244,29 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (s_playerInterestPointsScratch.Count == 0)
                 return false;
 
+            double frameKey;
+            try
+            {
+                frameKey = level?.ftime ?? double.NaN;
+            }
+            catch
+            {
+                frameKey = double.NaN;
+            }
+
+            if (!double.IsNaN(frameKey) && !double.Equals(frameKey, s_distanceSqCacheFrameKey))
+            {
+                s_localIndexToNearestDistanceSq.Clear();
+                s_distanceSqCacheFrameKey = frameKey;
+            }
+
+            if (TryGetTrackedIndex(mob, out var cacheIdx) &&
+                s_localIndexToNearestDistanceSq.TryGetValue(cacheIdx, out var cachedSq))
+            {
+                distanceSq = cachedSq;
+                return double.IsFinite(cachedSq);
+            }
+
             double mx;
             double my;
             try
@@ -1244,6 +1291,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             distanceSq = best;
+            if (double.IsFinite(best) && TryGetTrackedIndex(mob, out var idxForCache))
+                s_localIndexToNearestDistanceSq[idxForCache] = best;
+
             return double.IsFinite(best);
         }
 
@@ -1319,13 +1369,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static double GetHostMobStateEvalSeconds(Mob mob)
         {
-            return GetHostMobSyncPriority(mob) switch
+            var priority = GetHostMobSyncPriority(mob);
+            var seconds = priority switch
             {
                 HostMobSyncPriority.Active => 0.0,
                 HostMobSyncPriority.MidRange => HostFarStateEvalSeconds,
                 HostMobSyncPriority.FarRange => HostDormantStateEvalSeconds,
                 _ => HostDormantStateEvalSeconds * 1.6
             };
+
+            if (seconds <= 0.0 || priority == HostMobSyncPriority.Active)
+                return seconds;
+
+            lock (Sync)
+            {
+                if (trackedMobs.Count >= HostCrowdMobCountThreshold)
+                    return seconds * HostCrowdEvalStretchMultiplier;
+            }
+
+            return seconds;
         }
 
         private static void GetClientMobDrawAndAffectEvalSeconds(Mob? mob, out double drawSeconds, out double affectSeconds)
@@ -1958,6 +2020,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             hostQueuedOldSkillMarkers.Clear();
             hostDetectedTargets.Clear();
             s_playerInterestPointsScratch.Clear();
+            s_localIndexToNearestDistanceSq.Clear();
+            s_distanceSqCacheFrameKey = double.NaN;
             currentLevel = null;
             lastPlayerInterestLevel = null;
             lastPlayerInterestFrame = double.NaN;
