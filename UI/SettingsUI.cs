@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 using dc.hl.types;
@@ -22,10 +23,48 @@ public class SettingsUI :
     private const string MobsHpSliderLabel = "Mobs HP multiplier";
     private const string BossesHpSliderLabel = "Bosses HP multiplier";
     private const string VerticalSyncToggleLabel = "Sync vertical position";
+    private const string DebugSettingsHeaderLabel = "Debug";
+    private const string DebugImmortalToggleLabel = "Player immortal";
+    private const string DebugPerkCurrentLabel = "Start perk";
+    private const string DebugPerkPreviousLabel = "Previous perk";
+    private const string DebugPerkNextLabel = "Next perk";
 
     private static bool _hooksAttached;
     private static bool _isMultiplayerSettingsOpen;
     private static int _multiplayerSettingsOptionsId = -1;
+    private static readonly string[] DebugPerkFallbackChoices =
+    {
+        "P_Yolo",
+        "P_DeadInside",
+        "P_Necromancy",
+        "P_Recovery",
+        "P_Vengeance"
+    };
+
+    private readonly struct DebugModuleEntry
+    {
+        public readonly DebugModuleId Id;
+        public readonly string Label;
+
+        public DebugModuleEntry(DebugModuleId id, string label)
+        {
+            Id = id;
+            Label = label;
+        }
+    }
+
+    private static readonly DebugModuleEntry[] DebugModuleEntries =
+    {
+        new(DebugModuleId.MultiplayerModLang, "Module: language"),
+        new(DebugModuleId.CineHooks, "Module: cinematics hooks"),
+        new(DebugModuleId.MultiplayerUI, "Module: multiplayer UI"),
+        new(DebugModuleId.LevelInit, "Module: level init"),
+        new(DebugModuleId.MobsSynchronization, "Module: mobs sync"),
+        new(DebugModuleId.MinimapReveal, "Module: minimap reveal"),
+        new(DebugModuleId.LevelExitSync, "Module: level exit sync"),
+        new(DebugModuleId.InteractionSync, "Module: interaction sync"),
+        new(DebugModuleId.ConnectionUI, "Module: connection UI")
+    };
 
     private ModEntry mod { get; set; }
 
@@ -149,7 +188,14 @@ public class SettingsUI :
                 return;
 
             self.title?.set_text(MultiplayerSettingsMenuTitle.AsHaxeString());
-            AddMobsSettingsWidgets(self);
+            self.createScroller(0.0);
+
+            var widgetParent = self.scrollerFlow;
+            if (widgetParent == null)
+                return;
+
+            AddMobsSettingsWidgets(self, widgetParent);
+            AddDebugSettingsWidgets(self, widgetParent);
 
             int leftPadding = 5;
             HlAction onBack = new HlAction(() =>
@@ -163,7 +209,9 @@ public class SettingsUI :
                 null,
                 onBack,
                 Ref<int>.From(ref leftPadding),
-                null);
+                widgetParent);
+
+            self.updateScroller();
         }
         catch (Exception ex)
         {
@@ -171,19 +219,12 @@ public class SettingsUI :
         }
     }
 
-    private void AddMobsSettingsWidgets(Options self)
+    private void AddMobsSettingsWidgets(Options self, dc.h2d.Flow widgetParent)
     {
-        if (self == null)
+        if (self == null || widgetParent == null)
             return;
 
-        dc.h2d.Flow? headerParent = self.mainFlow ?? self.scrollerFlow;
-        if (headerParent == null)
-            return;
-
-        // Keep custom page widgets on main flow (non-scroller mode) to avoid null cbmpScroller.height paths.
-        dc.h2d.Flow? widgetParent = null;
-
-        self.addSeparator(MobsSettingsHeaderLabel.AsHaxeString(), headerParent);
+        self.addSeparator(MobsSettingsHeaderLabel.AsHaxeString(), widgetParent);
 
         bool enabledNow = MultiplayerSettingsStorage.EnableMobsSync;
         self.addToggleWidget(
@@ -262,6 +303,157 @@ public class SettingsUI :
             widgetParent);
     }
 
+    private void AddDebugSettingsWidgets(Options self, dc.h2d.Flow widgetParent)
+    {
+        if (!MultiplayerSettingsStorage.IsDebugSectionEnabled || self == null || widgetParent == null)
+            return;
+
+        self.addSeparator(DebugSettingsHeaderLabel.AsHaxeString(), widgetParent);
+
+        for (int i = 0; i < DebugModuleEntries.Length; i++)
+        {
+            var moduleEntry = DebugModuleEntries[i];
+            var moduleId = moduleEntry.Id;
+            bool enabledNow = MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
+            self.addToggleWidget(
+                moduleEntry.Label.AsHaxeString(),
+                null,
+                new HlFunc<bool>(() => ToggleModuleSetting(moduleId)),
+                Ref<bool>.From(ref enabledNow),
+                widgetParent);
+        }
+
+        bool immortalNow = MultiplayerSettingsStorage.DebugPlayerImmortal;
+        self.addToggleWidget(
+            DebugImmortalToggleLabel.AsHaxeString(),
+            null,
+            new HlFunc<bool>(ToggleDebugImmortalSetting),
+            Ref<bool>.From(ref immortalNow),
+            widgetParent);
+
+        var perkChoices = BuildDebugPerkChoices();
+        var selectedPerkIndex = ResolveCurrentDebugPerkIndex(perkChoices);
+        var selectedPerk = perkChoices[selectedPerkIndex];
+
+        int leftPadding = 5;
+        self.addSimpleWidget(
+            DebugPerkCurrentLabel.AsHaxeString(),
+            selectedPerk.AsHaxeString(),
+            new HlAction(() => { }),
+            Ref<int>.From(ref leftPadding),
+            widgetParent);
+
+        self.addSimpleWidget(
+            DebugPerkPreviousLabel.AsHaxeString(),
+            null,
+            new HlAction(() => CycleDebugStartPerk(self, -1)),
+            Ref<int>.From(ref leftPadding),
+            widgetParent);
+
+        self.addSimpleWidget(
+            DebugPerkNextLabel.AsHaxeString(),
+            null,
+            new HlAction(() => CycleDebugStartPerk(self, +1)),
+            Ref<int>.From(ref leftPadding),
+            widgetParent);
+    }
+
+    private void CycleDebugStartPerk(Options self, int delta)
+    {
+        if (self == null || self.destroyed)
+            return;
+
+        try
+        {
+            var perkChoices = BuildDebugPerkChoices();
+            if (perkChoices.Count == 0)
+                return;
+
+            var current = ResolveCurrentDebugPerkIndex(perkChoices);
+            var next = current + delta;
+            while (next < 0)
+                next += perkChoices.Count;
+            while (next >= perkChoices.Count)
+                next -= perkChoices.Count;
+
+            MultiplayerSettingsStorage.DebugStartPerkId = perkChoices[next];
+            self.setSection(new OptionsSection.S_Credits());
+        }
+        catch (Exception ex)
+        {
+            mod.Logger.Warning(ex, "[NetMod] Failed to change debug start perk");
+        }
+    }
+
+    private static List<string> BuildDebugPerkChoices()
+    {
+        var list = new List<string> { MultiplayerSettingsStorage.NoStartPerkValue };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            MultiplayerSettingsStorage.NoStartPerkValue
+        };
+
+        try
+        {
+            var byIndex = dc.Data.Class.item?.byIndex;
+            if (byIndex != null)
+            {
+                var len = byIndex.get_length();
+                for (var i = 0; i < len; i++)
+                {
+                    dynamic row = byIndex.getDyn(i);
+                    if (row == null)
+                        continue;
+
+                    string? id = null;
+                    try { id = row.id?.ToString(); } catch { }
+                    if (string.IsNullOrWhiteSpace(id))
+                        continue;
+
+                    var trimmed = id.Trim();
+                    if (!trimmed.StartsWith("P_", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (seen.Add(trimmed))
+                        list.Add(trimmed);
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        if (list.Count == 1)
+        {
+            for (int i = 0; i < DebugPerkFallbackChoices.Length; i++)
+            {
+                var fallback = DebugPerkFallbackChoices[i];
+                if (seen.Add(fallback))
+                    list.Add(fallback);
+            }
+        }
+
+        if (list.Count > 2)
+            list.Sort(1, list.Count - 1, StringComparer.OrdinalIgnoreCase);
+
+        return list;
+    }
+
+    private static int ResolveCurrentDebugPerkIndex(List<string> perkChoices)
+    {
+        if (perkChoices.Count == 0)
+            return 0;
+
+        var selected = MultiplayerSettingsStorage.DebugStartPerkId;
+        for (int i = 0; i < perkChoices.Count; i++)
+        {
+            if (string.Equals(perkChoices[i], selected, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return 0;
+    }
+
     private bool ToggleMobsSyncSetting()
     {
         bool enabled = !MultiplayerSettingsStorage.EnableMobsSync;
@@ -280,6 +472,20 @@ public class SettingsUI :
     {
         bool enabled = !MultiplayerSettingsStorage.SyncVerticalPosition;
         MultiplayerSettingsStorage.SyncVerticalPosition = enabled;
+        return enabled;
+    }
+
+    private static bool ToggleModuleSetting(DebugModuleId moduleId)
+    {
+        var enabled = !MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
+        MultiplayerSettingsStorage.SetModuleEnabled(moduleId, enabled);
+        return enabled;
+    }
+
+    private static bool ToggleDebugImmortalSetting()
+    {
+        var enabled = !MultiplayerSettingsStorage.DebugPlayerImmortal;
+        MultiplayerSettingsStorage.DebugPlayerImmortal = enabled;
         return enabled;
     }
 

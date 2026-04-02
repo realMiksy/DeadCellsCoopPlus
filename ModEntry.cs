@@ -87,7 +87,11 @@ namespace DeadCellsMultiplayerMod
         public static Hero me = null;
         public static GhostHero _ghost = null;
 
-        private GameDataSync gds;
+        private GameDataSync? gds;
+        private Hero? _debugPerkAppliedHero;
+        private string _debugPerkAppliedId = string.Empty;
+        private string _lastDebugPerkApplyErrorId = string.Empty;
+        private long _nextDebugPerkApplyTick;
 
         private string? _lastAnimSent;
         private int? _lastAnimQueueSent;
@@ -376,6 +380,10 @@ namespace DeadCellsMultiplayerMod
             GameMenu.SetRole(NetRole.None);
             s_steamOverlayCallbackPending = true;
             s_steamOverlayCallbackRetryCount = 0;
+            _debugPerkAppliedHero = null;
+            _debugPerkAppliedId = string.Empty;
+            _lastDebugPerkApplyErrorId = string.Empty;
+            _nextDebugPerkApplyTick = 0;
             TryEnsureSteamApiInitialized("OnGameEndInit", logFailure: true);
             TryParseConnectLobbyFromCommandLine();
         }
@@ -700,20 +708,63 @@ namespace DeadCellsMultiplayerMod
             Instance = this;
 
             this.gds = new GameDataSync(Logger);
-            MultiplayerModLang modLang = new MultiplayerModLang(this);
-            CineHooks CineHooks = new CineHooks();
-            MultiplayerUI MultiplayerUI = new MultiplayerUI(this, 0);
-            SettingsUI settingsUI = new SettingsUI(this);
-            Levelinit levelinit = new Levelinit(info);
-            MobsSynchronization mobs = new MobsSynchronization(this);
-            Minimapreveal minimapreveal = new Minimapreveal();
-            LevelExitSync levelExitSync = new LevelExitSync(this);
-            InteractionSync interactionSync = new InteractionSync(this);
-            ConnectionUI.Initialize(this);
+            InitializeOptionalModule(
+                DebugModuleId.MultiplayerModLang,
+                "MultiplayerModLang",
+                () => _ = new MultiplayerModLang(this));
+            InitializeOptionalModule(
+                DebugModuleId.CineHooks,
+                "CineHooks",
+                () => _ = new CineHooks());
+            InitializeOptionalModule(
+                DebugModuleId.MultiplayerUI,
+                "MultiplayerUI",
+                () => _ = new MultiplayerUI(this, 0));
+
+            _ = new SettingsUI(this);
+
+            InitializeOptionalModule(
+                DebugModuleId.LevelInit,
+                "Levelinit",
+                () => _ = new Levelinit(info));
+            InitializeOptionalModule(
+                DebugModuleId.MobsSynchronization,
+                "MobsSynchronization",
+                () => _ = new MobsSynchronization(this));
+            InitializeOptionalModule(
+                DebugModuleId.MinimapReveal,
+                "Minimapreveal",
+                () => _ = new Minimapreveal());
+            InitializeOptionalModule(
+                DebugModuleId.LevelExitSync,
+                "LevelExitSync",
+                () => _ = new LevelExitSync(this));
+            InitializeOptionalModule(
+                DebugModuleId.InteractionSync,
+                "InteractionSync",
+                () => _ = new InteractionSync(this));
+            InitializeOptionalModule(
+                DebugModuleId.ConnectionUI,
+                "ConnectionUI",
+                () => ConnectionUI.Initialize(this));
+
             GameMenu.Initialize(Logger);
             s_steamOverlayCallbackPending = true;
             s_steamOverlayCallbackRetryCount = 0;
             EventSystem.BroadcastEvent<IOnAdvancedModuleInitializing, ModEntry>(this);
+
+            void InitializeOptionalModule(DebugModuleId moduleId, string moduleName, Action init)
+            {
+                var isEnabled = !MultiplayerSettingsStorage.IsDebugSectionEnabled ||
+                                MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
+                if (isEnabled)
+                {
+                    init();
+                    return;
+                }
+
+                Logger.Information("[NetMod][Debug] Module disabled by settings: {Module}", moduleName);
+            }
         }
 
         void IOnAdvancedModuleInitializing.OnAdvancedModuleInitializing(ModEntry entry)
@@ -738,6 +789,7 @@ namespace DeadCellsMultiplayerMod
             Hook_Game.pause += Hook_Game_pause;
             Hook_Hero.kill += Hook_Hero_kill;
             Hook_Hero.onDie += Hook_Hero_onDie;
+            Hook_Hero.onDamage += Hook_Hero_onDamage;
             Hook_Hero.checkCursedWeaponHit += Hook_Hero_checkCursedWeaponHit;
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
@@ -1264,7 +1316,7 @@ namespace DeadCellsMultiplayerMod
         public void OnHeroInit()
         {
             GameMenu.MarkInRun();
-
+            ApplyDebugHeroRuntimeOptions();
         }
 
         public void OnFrameUpdate(double dt)
@@ -2358,6 +2410,7 @@ namespace DeadCellsMultiplayerMod
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             if (me == null) return;
+            ApplyDebugHeroRuntimeOptions();
             TryRecoverMissedFakeDeathFromLife();
             if (_netRole == NetRole.None || _net == null)
                 return;
@@ -2372,6 +2425,104 @@ namespace DeadCellsMultiplayerMod
             ReceiveGhostAttacks();
             UpdateGhostWeapons();
             UpdateGhostHeads();
+        }
+
+        private static bool IsDebugImmortalLocalHero(Hero? hero)
+        {
+            return hero != null &&
+                   me != null &&
+                   ReferenceEquals(hero, me) &&
+                   MultiplayerSettingsStorage.IsDebugSectionEnabled &&
+                   MultiplayerSettingsStorage.DebugPlayerImmortal;
+        }
+
+        private static void ApplyDebugImmortalState(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            try { hero.noDamageDuringBossBattle = true; } catch { }
+            try
+            {
+                if (hero.maxLife > 0 && hero.life < hero.maxLife)
+                    hero.life = hero.maxLife;
+            }
+            catch
+            {
+                try { hero.fullHeal(); } catch { }
+            }
+            try { hero._targetable = true; } catch { }
+        }
+
+        private void ApplyDebugHeroRuntimeOptions()
+        {
+            var hero = me;
+            if (hero == null || !MultiplayerSettingsStorage.IsDebugSectionEnabled)
+                return;
+
+            if (IsDebugImmortalLocalHero(hero))
+            {
+                ApplyDebugImmortalState(hero);
+            }
+            else
+            {
+                try { hero.noDamageDuringBossBattle = false; } catch { }
+            }
+
+            TryApplyDebugStartPerk(hero);
+        }
+
+        private void TryApplyDebugStartPerk(Hero hero)
+        {
+            if (hero == null)
+                return;
+
+            var configuredPerkId = MultiplayerSettingsStorage.DebugStartPerkId;
+            if (string.IsNullOrWhiteSpace(configuredPerkId) ||
+                string.Equals(configuredPerkId, MultiplayerSettingsStorage.NoStartPerkValue, StringComparison.OrdinalIgnoreCase))
+            {
+                _debugPerkAppliedHero = null;
+                _debugPerkAppliedId = string.Empty;
+                _lastDebugPerkApplyErrorId = string.Empty;
+                _nextDebugPerkApplyTick = 0;
+                return;
+            }
+
+            var perkId = configuredPerkId.Trim();
+            if (ReferenceEquals(_debugPerkAppliedHero, hero) &&
+                string.Equals(_debugPerkAppliedId, perkId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var now = Stopwatch.GetTimestamp();
+            if (_nextDebugPerkApplyTick != 0 && now < _nextDebugPerkApplyTick)
+                return;
+
+            try
+            {
+                var item = new InventItem(new InventItemKind.Perk(perkId.AsHaxeString()));
+                hero.applyItemPickEffect(hero, item);
+
+                if (string.Equals(perkId, "P_Yolo", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { hero.tryToApplyYoloPerk(); } catch { }
+                }
+
+                _debugPerkAppliedHero = hero;
+                _debugPerkAppliedId = perkId;
+                _lastDebugPerkApplyErrorId = string.Empty;
+                _nextDebugPerkApplyTick = 0;
+            }
+            catch (Exception ex)
+            {
+                _nextDebugPerkApplyTick = now + (long)(Stopwatch.Frequency * 1.5);
+                if (string.Equals(_lastDebugPerkApplyErrorId, perkId, StringComparison.Ordinal))
+                    return;
+
+                _lastDebugPerkApplyErrorId = perkId;
+                Logger.Warning(ex, "[NetMod] Failed to apply debug start perk {PerkId}", perkId);
+            }
         }
 
         private void UpdateGhostHeads()

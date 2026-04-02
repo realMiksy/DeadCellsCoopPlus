@@ -29,6 +29,12 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
             var net = _net;
             var suppressBroadcast = GameDataSync.ConsumeSuppressDeathBroadcast();
 
@@ -68,6 +74,12 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_kill(Hook_Hero.orig_kill orig, Hero self)
         {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
             var net = _net;
             if (_netRole != NetRole.None &&
                 net != null &&
@@ -89,6 +101,12 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_onDie(Hook_Hero.orig_onDie orig, Hero self)
         {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
             var net = _net;
             if (_netRole != NetRole.None &&
                 net != null &&
@@ -108,8 +126,25 @@ namespace DeadCellsMultiplayerMod
             orig(self);
         }
 
+        private void Hook_Hero_onDamage(Hook_Hero.orig_onDamage orig, Hero self, AttackData disengageRatio)
+        {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
+            orig(self, disengageRatio);
+        }
+
         private void Hook_Hero_checkCursedWeaponHit(Hook_Hero.orig_checkCursedWeaponHit orig, Hero self, AttackData a)
         {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
             var net = _net;
             if (_netRole != NetRole.None &&
                 net != null &&
@@ -254,6 +289,12 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Hero_startDeathCine(Hook_Hero.orig_startDeathCine orig, Hero self)
         {
+            if (IsDebugImmortalLocalHero(self))
+            {
+                ApplyDebugImmortalState(self);
+                return;
+            }
+
             var net = _net;
             if (_netRole != NetRole.None &&
                 net != null &&
