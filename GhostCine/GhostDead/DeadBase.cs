@@ -585,8 +585,17 @@ namespace DeadCellsMultiplayerMod
                     if (hudDyn != null)
                     {
                         dynamic mini = hudDyn.minimap;
-                        if (mini != null && mini.isFullscreen)
-                            return;
+                        if (mini != null)
+                        {
+                            try
+                            {
+                                if ((bool)mini.isFullscreen)
+                                    return;
+                            }
+                            catch
+                            {
+                            }
+                        }
                     }
                 }
                 catch

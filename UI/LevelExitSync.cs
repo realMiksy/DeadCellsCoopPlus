@@ -856,7 +856,7 @@ public class LevelExitSync :
                 continue;
 
             var dx = GetEntityX(target!) - heroX;
-            var dy = GetEntityY(target) - heroY;
+            var dy = GetEntityY(target!) - heroY;
             var distSq = dx * dx + dy * dy;
             if (distSq < bestDistSq)
             {
@@ -988,7 +988,7 @@ public class LevelExitSync :
         {
             var door = pair.Value.Door;
             var remove = door == null || currentLevel == null;
-            if (!remove)
+            if (!remove && door != null)
             {
                 remove = !ReferenceEquals(door._level, currentLevel) || SafeRead(() => door.destroyed, true);
             }
@@ -1060,14 +1060,18 @@ public class LevelExitSync :
 
     private static double GetEntityX(Entity e)
     {
-        if (e?.spr != null)
+        if (e == null)
+            return 0.0;
+        if (e.spr != null)
             return e.spr.x;
         return e.cx * 24.0;
     }
 
     private static double GetEntityY(Entity e)
     {
-        if (e?.spr != null)
+        if (e == null)
+            return 0.0;
+        if (e.spr != null)
             return e.spr.y;
         return e.cy * 24.0;
     }

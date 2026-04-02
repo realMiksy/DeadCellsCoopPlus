@@ -31,7 +31,7 @@ namespace DeadCellsMultiplayerMod.KingHead
         private FPoint? kingLastHeadPos;
         private bool usesCustomRemoteHead;
 
-        Serilog.ILogger _log;
+        private Serilog.ILogger? _log;
 
         public Kinghead()
         {

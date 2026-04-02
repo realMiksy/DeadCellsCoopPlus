@@ -117,6 +117,7 @@ public sealed partial class NetNode : IDisposable
         public RemoteState(int id)
         {
             Id = id;
+            HeadAnim = string.Empty;
         }
     }
 

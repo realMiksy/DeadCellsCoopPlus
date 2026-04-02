@@ -6,7 +6,7 @@ namespace DeadCellsMultiplayerMod.Tools.Sprtool
 {
     public static class Getpng
     {
-        public static dc.h3d.mat.Texture getColorMap(dc.String model, dc.String colorMap)
+        public static dc.h3d.mat.Texture? getColorMap(dc.String model, dc.String colorMap)
         {
             dc.String @string = "atlas/".AsHaxeString();
             dc._String _String =dc.String.Class;

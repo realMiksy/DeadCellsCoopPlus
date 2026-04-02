@@ -84,8 +84,8 @@ namespace DeadCellsMultiplayerMod
         public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
         public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
         private static bool[] pendingClientHeadRecreate = new bool[NetNode.MaxClientSlots];
-        public static Hero me = null;
-        public static GhostHero _ghost = null;
+        public static Hero me = null!;
+        public static GhostHero _ghost = null!;
 
         private GameDataSync? gds;
         private Hero? _debugPerkAppliedHero;
@@ -108,21 +108,21 @@ namespace DeadCellsMultiplayerMod
         private string? _lastSentHeroSkin;
         private string? _lastSentHeroHeadSkin;
 
-        public static MiniMap miniMap;
+        public static MiniMap miniMap = null!;
 
         public static bool kingInitialized = false;
 
-        public string levelId;
+        public string levelId = string.Empty;
 
         public static int remotePlayerId = -1;
 
-        public string remoteSkin;
-        public string remoteHeadSkin;
+        public string remoteSkin = string.Empty;
+        public string remoteHeadSkin = string.Empty;
 
-        public string lastHeadAnim;
-        public static ArrayDyn customHeads;
+        public string lastHeadAnim = string.Empty;
+        public static ArrayDyn customHeads = null!;
 
-        public InventItem inventItem;
+        public InventItem inventItem = null!;
         private bool _inventorySyncGuard;
         private bool _localFakeDead;
         private bool _localExitPenaltyApplied;
@@ -1215,7 +1215,7 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
-            return root;
+            return root!;
         }
 
 
@@ -2070,7 +2070,16 @@ namespace DeadCellsMultiplayerMod
                         RunWithSuppressedBossCineSend(() =>
                         {
                             var storyProgress = 0;
-                            try { storyProgress = (int)level.game.user.story.getNpcProgress(new NpcId.TickPriest()); } catch { }
+                            try
+                            {
+                                var ug = level.game?.user;
+                                if (ug != null)
+                                {
+                                    var sp = ug.story.getNpcProgress(new NpcId.TickPriest());
+                                    storyProgress = sp ?? 0;
+                                }
+                            }
+                            catch { }
 
                             if (storyProgress > 0 && level.boss is MamaTick mamaTick)
                             {

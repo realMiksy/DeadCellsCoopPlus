@@ -395,7 +395,7 @@ namespace DeadCellsMultiplayerMod
             {
                 var game = hom._level?.game;
                 var hero = game?.hero;
-                if (hero != null)
+                if (hero != null && game != null)
                 {
                     try { hero.controller.manualLock = false; } catch { }
                     try { game.curCine = null; } catch { }

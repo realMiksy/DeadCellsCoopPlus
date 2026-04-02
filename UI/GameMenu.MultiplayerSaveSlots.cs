@@ -242,7 +242,8 @@ namespace DeadCellsMultiplayerMod
                 var copyActionPressed = IsActionPressed(self?.controller, CopyActionCode);
                 var literalXPressed = IsLiteralXPressed();
 
-                if ((copyActionPressed || literalXPressed) &&
+                if (self != null &&
+                    (copyActionPressed || literalXPressed) &&
                     TryBeginMultiplayerSaveImportSelection(self))
                 {
                     return;
@@ -343,7 +344,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void ConfigureMultiplayerSaveChoice(SaveChoice self)
         {
-            if (self?.title != null)
+            if (self == null)
+                return;
+            if (self.title != null)
                 self.title.set_text(MakeHLString(ResolveSavedGamesTitle()));
 
             SetControlLabelVisible(self, 0, true);
@@ -355,7 +358,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void ConfigureOriginalSourceSaveChoice(SaveChoice self)
         {
-            if (self?.title != null)
+            if (self == null)
+                return;
+            if (self.title != null)
                 self.title.set_text(MakeHLString(Localize("Choose original save to copy")));
 
             SetControlLabelVisible(self, 0, false);
@@ -433,7 +438,8 @@ namespace DeadCellsMultiplayerMod
             controller.onActPressed = new HlAction<int, bool>((act, isKey) =>
             {
                 previousOnActPressed?.Invoke(act, isKey);
-                HandleSaveChoiceActionPressed(self, act);
+                if (self != null)
+                    HandleSaveChoiceActionPressed(self, act);
             });
         }
 
@@ -627,7 +633,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void EnsureValidSaveChoiceSelection(SaveChoice self)
         {
-            var saves = self?.saves;
+            if (self == null)
+                return;
+            var saves = self.saves;
             if (saves == null || saves.length <= 0)
                 return;
 
@@ -705,8 +713,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void RemoveDuplicateImportControlLabels(SaveChoice self, ControlLabel keep)
         {
-            var children = self?.fControlLabel?.children;
-            if (children == null)
+            var controlParent = self?.fControlLabel;
+            var children = controlParent?.children;
+            if (children == null || controlParent == null)
                 return;
 
             for (var i = children.length - 1; i >= 0; i--)
@@ -718,7 +727,7 @@ namespace DeadCellsMultiplayerMod
                 if (!string.Equals(rawText, Localize("Copy your save in that slot"), StringComparison.Ordinal))
                     continue;
 
-                self.fControlLabel.removeChild(label);
+                controlParent.removeChild(label);
             }
         }
 
@@ -758,11 +767,11 @@ namespace DeadCellsMultiplayerMod
 
         private static void TrySelectPreferredMultiplayerSlot(SaveChoice self)
         {
-            if (!_preferredMultiplayerSaveSlot.HasValue)
+            if (self == null || !_preferredMultiplayerSaveSlot.HasValue)
                 return;
 
             var targetSlot = _preferredMultiplayerSaveSlot.Value;
-            var saves = self?.saves;
+            var saves = self.saves;
             if (saves == null)
                 return;
 
@@ -805,7 +814,9 @@ namespace DeadCellsMultiplayerMod
         private static bool TryGetSelectedSaveWindow(SaveChoice self, out SaveWindow? window)
         {
             window = null;
-            var saves = self?.saves;
+            if (self == null)
+                return false;
+            var saves = self.saves;
             if (saves == null)
                 return false;
 
@@ -850,7 +861,9 @@ namespace DeadCellsMultiplayerMod
         private static bool TryGetSelectedSaveIndex(SaveChoice self, out int slot)
         {
             slot = 0;
-            var saves = self?.saves;
+            if (self == null)
+                return false;
+            var saves = self.saves;
             if (saves == null)
                 return false;
 

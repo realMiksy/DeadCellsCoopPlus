@@ -19,9 +19,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection.LightingInitialize
             InitializeLightingForMainPage(connection);
         }
 
-        private int ligttshadowid;
-        private int lightDirVectorId;
-
         public dc.h3d.Vector? ligttshadow;
         public dc.h3d.Vector? lightDirVecto;
 

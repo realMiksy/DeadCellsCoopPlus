@@ -2470,6 +2470,8 @@ namespace DeadCellsMultiplayerMod
                 for (int i = 0; i < len; i++)
                 {
                     var item = getDyn.Invoke(arrObj, new object[] { i });
+                    if (item == null)
+                        continue;
                     var label = GetMenuLabel(item);
                     foreach (var l in labels)
                     {
@@ -2513,6 +2515,8 @@ namespace DeadCellsMultiplayerMod
                 for (int i = 0; i < len; i++)
                 {
                     var item = getDyn.Invoke(arrObj, new object[] { i });
+                    if (item == null)
+                        continue;
                     var label = GetMenuLabel(item);
                     foreach (var l in labels)
                     {

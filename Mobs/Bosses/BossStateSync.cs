@@ -29,11 +29,14 @@ public static class BossStateSync
                 var phase = gardener.phase;
                 parts.Add(PhasePrefix + phase.ToString(CultureInfo.InvariantCulture));
 
-                var action = gardener.action;
-                if (action != null)
+                try
                 {
-                    var idx = (int)action.Index;
+                    var idx = (int)gardener.action.Index;
                     parts.Add(ActionPrefix + idx.ToString(CultureInfo.InvariantCulture));
+                }
+                catch
+                {
+                    // action may be unset
                 }
             }
             catch
@@ -92,19 +95,22 @@ public static class BossStateSync
             {
                 if (phaseVal.HasValue)
                 {
+#pragma warning disable CS8604, CS8625 // Gardener phase/action are Haxe-bound; compare via runtime equality
                     var currentPhase = gardener.phase;
-                    if (currentPhase != phaseVal.Value)
+                    if (!Equals(currentPhase, phaseVal.Value))
                         gardener.phase = phaseVal.Value;
+#pragma warning restore CS8604, CS8625
                 }
 
                 if (actionVal.HasValue)
                 {
-                    var currentActionIndex = TryGetBossActionIndex(gardener.action);
-                    if (!currentActionIndex.HasValue || currentActionIndex.Value != actionVal.Value)
+                    var currentAction = gardener.action;
+                    var currentActionIndex = TryGetBossActionIndex(currentAction);
+                    if (!currentActionIndex.HasValue || currentActionIndex.Value != actionVal.GetValueOrDefault())
                     {
-                        var action = CreateBossActionByIndex(actionVal.Value);
-                        if (action != null)
-                            gardener.action = action;
+                        BossAction? newAction = CreateBossActionByIndex(actionVal.Value);
+                        if (newAction is not null)
+                            gardener.action = newAction;
                     }
                 }
             }

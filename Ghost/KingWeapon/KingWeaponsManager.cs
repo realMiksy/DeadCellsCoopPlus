@@ -39,13 +39,17 @@ namespace DeadCellsMultiplayerMod.Ghost
 
         public override void init()
         {
-            inventory = king.inventory;
+            var inv = king.inventory;
+            if(inv != null)
+                inventory = inv;
         }
 
         public void update()
         {
             if(hero == null) return;
-            if(inventory == null) inventory = king.inventory;
+            var inv = king.inventory;
+            if(inventory == null && inv != null)
+                inventory = inv;
 
             var item = GetWeaponItem(pendingSlot);
             if(item == null || item.kind?.Index == InventItemKind.Indexes.Meta) return;

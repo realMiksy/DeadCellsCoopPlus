@@ -81,8 +81,8 @@ namespace DeadCellsMultiplayerMod
         {
             ModEntry.PumpSteamCallbacksForOverlay();
             GameMenu.ProcessMainThreadQueue();
-            cb = WrapQuitCallbackIfNeeded(str, cb);
-            var ret = orig(self, str, cb, help, isEnable, color);
+            var wrappedCb = WrapQuitCallbackIfNeeded(str, cb);
+            var ret = orig(self, str, wrappedCb ?? cb, help, isEnable, color);
 
             try
             {
@@ -91,6 +91,8 @@ namespace DeadCellsMultiplayerMod
                 if (!self.isMainMenu) return ret;
 
                 var items = TitleScreenReflection.GetMemberValue(self, "menuItems", true);
+                if (items == null)
+                    return ret;
                 var count = TitleScreenReflection.GetArrayLength(items);
                 if (count == 1)
                 {
@@ -111,10 +113,10 @@ namespace DeadCellsMultiplayerMod
             return ret;
         }
 
-        private static HlAction WrapQuitCallbackIfNeeded(dc.String label, HlAction callback)
+        private static HlAction? WrapQuitCallbackIfNeeded(dc.String label, HlAction? callback)
         {
             if (callback == null)
-                return callback;
+                return null;
             if (_role == NetRole.None)
                 return callback;
 

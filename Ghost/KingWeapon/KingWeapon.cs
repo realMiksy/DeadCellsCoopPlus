@@ -15,7 +15,7 @@ namespace DeadCellsMultiplayerMod.Ghost
 {
     public class KingWeapon : Weapon
     {
-        internal KingSkin source;
+        internal KingSkin source = null!;
         private bool _usingKingContext;
         private static ObjFieldInfoCache _cachedAnimId;
         private static ObjFieldInfoCache _cachedAnimSpd;
@@ -93,13 +93,13 @@ namespace DeadCellsMultiplayerMod.Ghost
         {
             var spr = source?.spr;
             var anim = spr?.get_anim();
-            if(anim == null) return;
+            if(anim == null || spr == null) return;
 
             var animId = ReadAnimId(a);
-            if(!HasGroup(spr, animId))
+            if(animId == null || !HasGroup(spr, animId))
             {
                 animId = ReadAltAnim(a);
-                if(!HasGroup(spr, animId))
+                if(animId == null || !HasGroup(spr, animId))
                     return;
             }
 
@@ -195,7 +195,7 @@ namespace DeadCellsMultiplayerMod.Ghost
         private static double? ReadAnimSpd(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
         {
             if(a == null) return null;
-            object raw;
+            object? raw;
             try
             {
                 raw = HaxeProxyHelper.GetFieldById<object>((HaxeProxyBase)(object)a, "animSpd", ref _cachedAnimSpd);
@@ -212,7 +212,7 @@ namespace DeadCellsMultiplayerMod.Ghost
             return null;
         }
 
-        private static dc.String ReadAnimId(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
+        private static dc.String? ReadAnimId(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
         {
             if(a == null) return null;
             try
@@ -229,7 +229,7 @@ namespace DeadCellsMultiplayerMod.Ghost
             }
         }
 
-        private static dc.String ReadFxId(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
+        private static dc.String? ReadFxId(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
         {
             if(a == null) return null;
             try
@@ -246,7 +246,7 @@ namespace DeadCellsMultiplayerMod.Ghost
             }
         }
 
-        private static dc.String ReadAltAnim(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
+        private static dc.String? ReadAltAnim(virtual_animId_animSpd_area_breachBonus_canCrit_charge_coolDown_critMul_dynamicCharge_earlyCombo_fxId_fxProps_glowColor_hitFrame_lockCtrlAfter_onionSkinFrame_onionSkinOffX_power_props_sfxCharge_sfxHit_sfxProps_sfxRelease_ a)
         {
             if(a == null) return null;
             try

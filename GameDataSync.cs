@@ -25,18 +25,18 @@ namespace DeadCellsMultiplayerMod
 {
     internal partial class GameDataSync : IEventReceiver, IOnAdvancedModuleInitializing
     {
-        static Serilog.ILogger _log;
+        static Serilog.ILogger? _log;
         static public int Seed;
         private static readonly bool EnableStoryManagerSync = false;
 
         // When false, host does not send PROGRESS (packed user) to clients.
         private static readonly bool EnableSendHostUserProgress = false;
 
-        static public virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ _isTwitch;
+        static public virtual_baseLootLevel_biome_bonusTripleScrollAfterBC_cellBonus_dlc_doubleUps_eliteRoomChance_eliteWanderChance_flagsProps_group_icon_id_index_loreDescriptions_mapDepth_minGold_mobDensity_mobs_name_nextLevels_parallax_props_quarterUpsBC3_quarterUpsBC4_specificLoots_specificSubBiome_transitionTo_tripleUps_worldDepth_ _isTwitch = default!;
         static public bool _isCustom;
         static public bool _mode;
 
-        static public LaunchMode _launch;
+        static public LaunchMode _launch = default!;
         private static readonly object _bossRuneLock = new();
         private static int? _remoteBossRune;
         private static int? _hostBossRune;
@@ -133,10 +133,10 @@ namespace DeadCellsMultiplayerMod
             isCustom = false;
             mode = false;
             Seed = lvl;
-            ModEntry.me = null;
+            ModEntry.me = null!;
             ModEntry.ResetClientSlots();
             ModEntry.kingInitialized = false;
-            ModEntry._ghost = null;
+            ModEntry._ghost = null!;
             var net = GameMenu.NetRef;
             var shouldSynchronizeSeed = ShouldSynchronizeRunSeed(gdata);
             if (net == null || !net.IsAlive)
@@ -318,7 +318,7 @@ namespace DeadCellsMultiplayerMod
                 _origHeroHeadSkin = CleanSkin(user.heroHeadSkin?.ToString());
             }
 
-            if (!_origBossRuneCaptured)
+            if (user != null && !_origBossRuneCaptured)
             {
                 _origBossRuneCaptured = true;
                 _origBossRune = user.bossRuneActivated;
@@ -3009,12 +3009,13 @@ namespace DeadCellsMultiplayerMod
 
         private static void LogGenericZDoorDiagnostics(LevelGraphSync sync, Dictionary<string, RoomNode> byUid)
         {
-            if (_log == null || sync.Nodes == null)
+            var nodes = sync.Nodes;
+            if (_log == null || nodes == null)
                 return;
 
-            for (int i = 0; i < sync.Nodes.Count; i++)
+            for (int i = 0; i < nodes.Count; i++)
             {
-                var src = sync.Nodes[i];
+                var src = nodes[i];
                 if (src == null || !string.Equals(src.RType, "GenericZDoor", StringComparison.Ordinal))
                     continue;
                 if (!byUid.TryGetValue(src.Uid, out var node))

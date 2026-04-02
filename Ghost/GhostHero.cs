@@ -1,4 +1,4 @@
-﻿using dc.en;
+using dc.en;
 using dc.pr;
 using ModCore.Utilities;
 using Serilog;
@@ -29,10 +29,6 @@ namespace DeadCellsMultiplayerMod
         private readonly Hero _me;
         private static ILogger? _log;
         private readonly Dictionary<Entity, dc.h2d.Text> _labels = new();
-
-        private string? _lastRemoteAnim;
-        private int? _lastRemoteAnimQueue;
-        private bool? _lastRemoteAnimG;
 
         private const double RestartFrameIndex = 0;
 
@@ -97,10 +93,8 @@ namespace DeadCellsMultiplayerMod
             return king;
         }
 
-        private bool stopanim = false;
         public void disposeKing(GhostKing k)
         {
-            stopanim = true;
             if (k.spr != null)
             {
                 ColorMap shader = (ColorMap)k.spr.getShader(ColorMap.Class);
