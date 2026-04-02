@@ -1251,7 +1251,7 @@ namespace DeadCellsMultiplayerMod
 
                 var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
                 AddMenuButton(screen, GetText.Instance.GetString("Play"), () => StartHostRun(screen), GetText.Instance.GetString("Launch game"));
-                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), MultiplayerSaveButtonHelp);
+                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
                 AddMenuButton(screen, GetText.Instance.GetString("Back"), () =>
                 {
                     StopNetworkFromMenu();
@@ -1293,7 +1293,7 @@ namespace DeadCellsMultiplayerMod
                     () => {DisconnectFromMenu(screen); screen.ShouldAutoHideConnectionUI(false);},
                     GetText.Instance.GetString("Disconnect and return to main menu"));
                 var multiplayerSaveLabel = GetMultiplayerSaveButtonLabel();
-                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), MultiplayerSaveButtonHelp);
+                AddMenuButton(screen, multiplayerSaveLabel, () => OpenMultiplayerSlotMenu(screen), Localize("Choose multiplayer save slot"));
 
                 RemoveMenuItems(screen, "About Core Modding", GetText.Instance.GetString("Play multiplayer"));
                 RemoveDuplicatesKeepFirst(screen, GetText.Instance.GetString("Disconnect"), multiplayerSaveLabel);

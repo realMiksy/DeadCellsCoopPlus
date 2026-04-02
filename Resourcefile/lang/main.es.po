@@ -109,3 +109,15 @@ msgstr "Falta el ID de anfitrión de Steam. Revisa la consola."
 
 msgid "Back to multiplayer menu"
 msgstr "Volver al menú multijugador"
+
+msgid "Choose multiplayer save slot"
+msgstr "Elige ranura de guardado multijugador"
+
+msgid "Copy your save in that slot"
+msgstr "Copia tu partida en esa ranura"
+
+msgid "Choose original save to copy"
+msgstr "Elige la partida original a copiar"
+
+msgid "Saved games"
+msgstr "Partidas guardadas"

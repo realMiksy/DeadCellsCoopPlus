@@ -1,5 +1,4 @@
 using System;
-using dc;
 using dc.h2d;
 using dc.hxd;
 using dc.hl.types;
@@ -20,10 +19,6 @@ namespace DeadCellsMultiplayerMod
     internal static partial class GameMenu
     {
         private const string MultiplayerSaveFolderName = "MSave";
-        private const string MultiplayerSaveButtonHelp = "Choose multiplayer save slot";
-        private const string MultiplayerSaveImportLabel = "Copy your save in that slot";
-        private const string OriginalSaveImportTitle = "Choose original save to copy";
-        private const string FallbackSavedGamesTitle = "Saved games";
         private const string SavedGamesTitleLocalizationKey = "SAUVEGARDES";
         private const int CopyActionCode = 20;
         private const int LiteralKeyboardXKeyCode = 88;
@@ -42,7 +37,7 @@ namespace DeadCellsMultiplayerMod
         private static int? _multiplayerSaveImportTargetSlot;
         private static int? _preferredMultiplayerSaveSlot;
         private static ControlLabel? _multiplayerSaveImportControlLabel;
-        private static string _multiplayerSaveDefaultTitle = FallbackSavedGamesTitle;
+        private static string _multiplayerSaveDefaultTitle = string.Empty;
         private static bool _hasCapturedMultiplayerSaveDefaultTitle;
         private static bool _pendingSaveChoiceReflow;
         private static MultiplayerSaveMenuKind _pendingSaveChoiceReflowKind = MultiplayerSaveMenuKind.None;
@@ -289,7 +284,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                var current = Main.Class.ME?.options?.curSlot;
+                var current = dc.Main.Class.ME?.options?.curSlot;
                 if (current.HasValue && current.Value >= 0)
                     return current.Value;
             }
@@ -361,7 +356,7 @@ namespace DeadCellsMultiplayerMod
         private static void ConfigureOriginalSourceSaveChoice(SaveChoice self)
         {
             if (self?.title != null)
-                self.title.set_text(MakeHLString(OriginalSaveImportTitle));
+                self.title.set_text(MakeHLString(Localize("Choose original save to copy")));
 
             SetControlLabelVisible(self, 0, false);
             SetControlLabelVisible(self, 1, false);
@@ -489,7 +484,7 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                var current = Main.Class.ME?.options?.curSlot;
+                var current = dc.Main.Class.ME?.options?.curSlot;
                 if (current.HasValue && current.Value >= 0)
                 {
                     slot = current.Value;
@@ -513,7 +508,7 @@ namespace DeadCellsMultiplayerMod
             var title = self?.title?.rawText?.ToString();
             if (string.IsNullOrWhiteSpace(title))
                 return;
-            if (string.Equals(title, OriginalSaveImportTitle, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(title, Localize("Choose original save to copy"), StringComparison.OrdinalIgnoreCase))
                 return;
 
             _multiplayerSaveDefaultTitle = title;
@@ -524,7 +519,7 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                var localized = Lang.Class.t?.get(MakeHLString(SavedGamesTitleLocalizationKey), null)?.ToString();
+                var localized = dc.Lang.Class.t?.get(MakeHLString(SavedGamesTitleLocalizationKey), null)?.ToString();
                 if (!string.IsNullOrWhiteSpace(localized))
                 {
                     _multiplayerSaveDefaultTitle = localized;
@@ -536,7 +531,9 @@ namespace DeadCellsMultiplayerMod
             {
             }
 
-            return _multiplayerSaveDefaultTitle;
+            return string.IsNullOrWhiteSpace(_multiplayerSaveDefaultTitle)
+                ? Localize("Saved games")
+                : _multiplayerSaveDefaultTitle;
         }
 
         private static void EnsureCurrentSaveChoiceTitle(SaveChoice self)
@@ -550,11 +547,11 @@ namespace DeadCellsMultiplayerMod
                 switch (_multiplayerSaveMenuKind)
                 {
                     case MultiplayerSaveMenuKind.OriginalSourceSelection:
-                        if (!string.Equals(title.rawText?.ToString(), OriginalSaveImportTitle, StringComparison.Ordinal))
-                            title.set_text(MakeHLString(OriginalSaveImportTitle));
+                        if (!string.Equals(title.rawText?.ToString(), Localize("Choose original save to copy"), StringComparison.Ordinal))
+                            title.set_text(MakeHLString(Localize("Choose original save to copy")));
                         break;
                     case MultiplayerSaveMenuKind.MultiplayerSlots:
-                        if (string.Equals(title.rawText?.ToString(), OriginalSaveImportTitle, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(title.rawText?.ToString(), Localize("Choose original save to copy"), StringComparison.OrdinalIgnoreCase))
                             title.set_text(MakeHLString(ResolveSavedGamesTitle()));
                         break;
                 }
@@ -673,13 +670,13 @@ namespace DeadCellsMultiplayerMod
                 _multiplayerSaveImportControlLabel = existing;
                 RemoveDuplicateImportControlLabels(self, existing);
                 existing.set_visible(true);
-                existing.tfLabel?.set_text(MakeHLString(MultiplayerSaveImportLabel));
+                existing.tfLabel?.set_text(MakeHLString(Localize("Copy your save in that slot")));
                 existing.reflow();
                 self.fControlLabel.reflow();
                 return;
             }
 
-            var importLabel = new ControlLabel(CreateActionArray(CopyActionCode), MakeHLString(MultiplayerSaveImportLabel), null, null, null, null);
+            var importLabel = new ControlLabel(CreateActionArray(CopyActionCode), MakeHLString(Localize("Copy your save in that slot")), null, null, null, null);
             importLabel.set_visible(true);
             importLabel.reflow();
             _multiplayerSaveImportControlLabel = importLabel;
@@ -699,7 +696,7 @@ namespace DeadCellsMultiplayerMod
                     continue;
 
                 var rawText = label.tfLabel?.rawText?.ToString();
-                if (string.Equals(rawText, MultiplayerSaveImportLabel, StringComparison.Ordinal))
+                if (string.Equals(rawText, Localize("Copy your save in that slot"), StringComparison.Ordinal))
                     return label;
             }
 
@@ -718,7 +715,7 @@ namespace DeadCellsMultiplayerMod
                     continue;
 
                 var rawText = label.tfLabel?.rawText?.ToString();
-                if (!string.Equals(rawText, MultiplayerSaveImportLabel, StringComparison.Ordinal))
+                if (!string.Equals(rawText, Localize("Copy your save in that slot"), StringComparison.Ordinal))
                     continue;
 
                 self.fControlLabel.removeChild(label);
@@ -899,7 +896,7 @@ namespace DeadCellsMultiplayerMod
         {
             try
             {
-                var options = Main.Class.ME?.options;
+                var options = dc.Main.Class.ME?.options;
                 if (options == null)
                     return;
 

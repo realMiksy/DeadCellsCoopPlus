@@ -111,3 +111,16 @@ msgstr ""
 
 msgid "Back to multiplayer menu"
 msgstr ""
+
+#: GameMenu.MultiplayerSaveSlots.cs
+msgid "Choose multiplayer save slot"
+msgstr ""
+
+msgid "Copy your save in that slot"
+msgstr ""
+
+msgid "Choose original save to copy"
+msgstr ""
+
+msgid "Saved games"
+msgstr ""

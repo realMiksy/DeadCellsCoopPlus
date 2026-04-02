@@ -294,3 +294,15 @@ msgstr "按住以复活。"
 
 msgid "Game Over"
 msgstr "游戏结束"
+
+msgid "Choose multiplayer save slot"
+msgstr "选择多人存档槽位"
+
+msgid "Copy your save in that slot"
+msgstr "将存档复制到该槽位"
+
+msgid "Choose original save to copy"
+msgstr "选择要复制的原始存档"
+
+msgid "Saved games"
+msgstr "已保存的游戏"

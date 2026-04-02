@@ -290,3 +290,15 @@ msgstr "Удерживайте, чтобы воскресить."
 
 msgid "Game Over"
 msgstr "Игра окончена"
+
+msgid "Choose multiplayer save slot"
+msgstr "Выберите слот сохранения мультиплеера"
+
+msgid "Copy your save in that slot"
+msgstr "Скопировать сохранение в этот слот"
+
+msgid "Choose original save to copy"
+msgstr "Выберите сохранение для копирования"
+
+msgid "Saved games"
+msgstr "Сохранения"

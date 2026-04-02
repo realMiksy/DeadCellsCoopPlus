@@ -290,3 +290,15 @@ msgstr ""
 
 msgid "Game Over"
 msgstr ""
+
+msgid "Choose multiplayer save slot"
+msgstr ""
+
+msgid "Copy your save in that slot"
+msgstr ""
+
+msgid "Choose original save to copy"
+msgstr ""
+
+msgid "Saved games"
+msgstr ""
