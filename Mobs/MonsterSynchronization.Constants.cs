@@ -21,7 +21,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientBossNetworkAttackAiPreserveSeconds = 1.2;
         private const double HostContactAttackSendCooldownSeconds = 0.3;
         private const double HostRetargetRefreshSeconds = 0.105;
-        private const double HostActiveStateEvalSeconds = 0.05;
+        private const double HostActiveStateEvalSeconds = 0.066;
         private const double HostFarStateEvalSeconds = 0.29;
         private const double HostDormantStateEvalSeconds = 0.775;
         private const double ClientFarAffectEvalSeconds = 0.48;

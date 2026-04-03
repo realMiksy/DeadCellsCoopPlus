@@ -1160,7 +1160,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 animPayload = BuildAnimPayload(mob);
                 mobType = BuildMobStateTypeSignature(mob);
-                statePayload = BuildMobAffectStatePayload(mob, includeBossStateForHost: true);
+                statePayload = BuildHostMobStatePayload(mob);
                 cachedPayload = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
                 hasCachedPayload = true;
                 lock (Sync)
@@ -1200,7 +1200,29 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     hostCachedPayloadBySyncId[mobSyncId] = new CachedHostMobPayload(animPayload, mobType, statePayload, nowTick);
             }
 
-            snapshot = new NetNode.MobStateSnapshot(mobSyncId, x, y, dir, life, maxLife, animPayload, mobType, statePayload);
+            var snapshotAnimPayload = hadPrevious &&
+                                      string.Equals(previous.AnimPayload, animPayload, StringComparison.Ordinal)
+                ? string.Empty
+                : animPayload;
+            var snapshotMobType = hadPrevious &&
+                                  string.Equals(previous.Type, mobType, StringComparison.Ordinal)
+                ? string.Empty
+                : mobType;
+            var snapshotStatePayload = hadPrevious &&
+                                       string.Equals(previous.StatePayload, statePayload, StringComparison.Ordinal)
+                ? string.Empty
+                : statePayload;
+
+            snapshot = new NetNode.MobStateSnapshot(
+                mobSyncId,
+                x,
+                y,
+                dir,
+                life,
+                maxLife,
+                snapshotAnimPayload,
+                snapshotMobType,
+                snapshotStatePayload);
             return true;
         }
 
@@ -1598,6 +1620,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             return payload;
+        }
+
+        private static string BuildHostMobStatePayload(Mob mob)
+        {
+            if (mob == null)
+                return string.Empty;
+
+            var presencePayload = BuildMobAffectPresencePayload(mob);
+            return BossStateSync.AppendBossState(presencePayload, mob);
         }
 
         private static bool IsApproximatelyEqual(double a, double b, double epsilon)
@@ -3721,7 +3752,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 for (int i = 0; i < states.Count; i++)
                 {
                     var state = states[i];
-                    hostMobTypeBySyncId[state.Index] = state.Type ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(state.Type))
+                        hostMobTypeBySyncId[state.Index] = state.Type;
 
                     var localIndex = ResolveLocalIndexForIncomingStateLocked(state, s_usedLocalIndicesScratch);
                     if (localIndex < 0)
@@ -3745,14 +3777,24 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             state.StatePayload ?? string.Empty));
                     }
 
+                    var mergedAnimPayload = state.AnimPayload ?? string.Empty;
+                    var mergedStatePayload = state.StatePayload ?? string.Empty;
+                    if (clientMobTargets.TryGetValue(localIndex, out var previousTarget))
+                    {
+                        if (string.IsNullOrEmpty(mergedAnimPayload))
+                            mergedAnimPayload = previousTarget.AnimPayload;
+                        if (string.IsNullOrEmpty(mergedStatePayload))
+                            mergedStatePayload = previousTarget.StatePayload;
+                    }
+
                     clientMobTargets[localIndex] = new ClientMobState(
                         state.X,
                         state.Y,
                         incomingDir,
                         state.Life,
                         state.MaxLife,
-                        state.AnimPayload,
-                        state.StatePayload ?? string.Empty);
+                        mergedAnimPayload,
+                        mergedStatePayload);
                 }
             }
 
