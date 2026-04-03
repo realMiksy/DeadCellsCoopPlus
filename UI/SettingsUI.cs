@@ -198,6 +198,8 @@ public class SettingsUI :
         if (self == null || widgetParent == null)
             return;
 
+        AddSectionLabel(self, widgetParent, "Mobs settings");
+
         bool enabledNow = MultiplayerSettingsStorage.EnableMobsSync;
         self.addToggleWidget(
             GameMenu.Localize("Enable mobs sync").AsHaxeString(),
@@ -297,6 +299,8 @@ public class SettingsUI :
         if (!MultiplayerSettingsStorage.IsDebugSectionEnabled || self == null || widgetParent == null)
             return;
 
+        AddSectionLabel(self, widgetParent, "Debug");
+
         foreach (var moduleId in DebugModuleOrder)
         {
             bool enabledNow = MultiplayerSettingsStorage.IsModuleEnabled(moduleId);
@@ -357,6 +361,31 @@ public class SettingsUI :
             new HlAction(() => CycleDebugStartPerk(self, +1)),
             Ref<int>.From(ref leftPadding),
             widgetParent);
+    }
+
+    private static void AddSectionLabel(Options self, dc.h2d.Flow widgetParent, string label)
+    {
+        if (self == null || widgetParent == null || string.IsNullOrWhiteSpace(label))
+            return;
+
+        var localized = GameMenu.Localize(label).AsHaxeString();
+        try
+        {
+            // Native game header widget (centered title + separator line).
+            self.addSeparator(localized, widgetParent);
+            return;
+        }
+        catch
+        {
+            // Fallback keeps menu usable if separator fails in some contexts.
+            int leftPadding = 0;
+            self.addSimpleWidget(
+                localized,
+                null,
+                new HlAction(() => { }),
+                Ref<int>.From(ref leftPadding),
+                widgetParent);
+        }
     }
 
     private void CycleDebugStartPerk(Options self, int delta)
