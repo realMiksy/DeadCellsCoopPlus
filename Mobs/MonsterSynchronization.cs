@@ -514,7 +514,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             if (isHost && isSyncMob)
+            {
+                TryApplyHostClientVisibilityLease(self);
                 TryAssignHostAttackTarget(self);
+            }
 
             orig(self);
 
@@ -569,10 +572,31 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var dieX = 0.0;
             var dieY = 0.0;
             NetNode? dieNet = null;
+            var isClient = false;
             if (self != null && suppressMobDieSendDepth <= 0)
             {
                 dieNet = GameMenu.NetRef;
-                if (dieNet != null && dieNet.IsAlive && TryGetMobSyncId(self, out dieSyncId))
+                isClient = IsClient(dieNet);
+
+                // Client is not authoritative for mob death; wait for host die/hit confirmation.
+                if (isClient && IsSyncMob(self))
+                {
+                    try
+                    {
+                        if (self.life <= 0)
+                            self.life = 1;
+                    }
+                    catch
+                    {
+                    }
+
+                    return;
+                }
+
+                if (dieNet != null &&
+                    dieNet.IsAlive &&
+                    dieNet.IsHost &&
+                    TryGetMobSyncId(self, out dieSyncId))
                 {
                     shouldSendDie = true;
                     dieX = GetSyncX(self);
@@ -646,14 +670,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (net == null || !IsSyncMob(self))
                     return;
 
+                var isClient = IsClient(net);
+                var tookLifeDelta = self.life < preDamageLife;
+                var becameDead = self.life <= 0;
                 bool shouldReport = false;
                 if (IsHost(net))
                 {
                     shouldReport = true;
                 }
-                else if (IsClient(net))
+                else if (isClient)
                 {
                     shouldReport = IsDamageFromLocalPlayer(i);
+                    // Fallback for damage-source edge cases: never drop a lethal hit report.
+                    if (!shouldReport && tookLifeDelta && becameDead)
+                        shouldReport = true;
                 }
 
                 if (!shouldReport)
@@ -725,6 +755,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
             finally
             {
+                TryRecoverClientSyncMobLifeAfterLocalDamage(self, preDamageLife);
                 TryRecoverSuppressedClientBossDie(self, preDamageLife);
             }
         }
@@ -1013,10 +1044,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             var changed = !clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastDraw) ||
                                           lastDraw.IsOutOfGame != isOutOfGame ||
                                           lastDraw.IsOnScreen != isOnScreen;
-                            var periodicRefresh = isOnScreen &&
-                                                  !isOutOfGame &&
-                                                  (!clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastVisibleDraw) ||
-                                                   ElapsedSeconds(lastVisibleDraw.Tick, now) >= keepAliveSeconds);
+                            var periodicRefresh = !isOutOfGame &&
+                                                  (!clientLastSentDrawStateBySyncId.TryGetValue(mobSyncId, out var lastActiveDraw) ||
+                                                   ElapsedSeconds(lastActiveDraw.Tick, now) >= keepAliveSeconds);
                             if (changed || periodicRefresh)
                             {
                                 clientLastSentDrawStateBySyncId[mobSyncId] = new ClientDrawSentState(isOutOfGame, isOnScreen, now);
@@ -1101,19 +1131,79 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (IsHost(GameMenu.NetRef) && TryGetMobSyncId(mob, out var mobSyncId) && mobSyncId >= 0)
             {
                 var now = Stopwatch.GetTimestamp();
-                lock (Sync)
-                {
-                    if (hostClientVisibleUntilTickBySyncId.TryGetValue(mobSyncId, out var visibleUntilTick))
-                    {
-                        if (now <= visibleUntilTick)
-                            return true;
-
-                        hostClientVisibleUntilTickBySyncId.Remove(mobSyncId);
-                    }
-                }
+                if (HasActiveHostClientVisibilityLease(mobSyncId, now, pruneExpired: true))
+                    return true;
             }
 
             return false;
+        }
+
+        private static bool HasActiveHostClientVisibilityLease(int mobSyncId, long nowTick, bool pruneExpired)
+        {
+            if (mobSyncId < 0)
+                return false;
+
+            lock (Sync)
+            {
+                if (!hostClientVisibleUntilTickBySyncId.TryGetValue(mobSyncId, out var visibleUntilTick))
+                    return false;
+
+                if (nowTick <= visibleUntilTick)
+                    return true;
+
+                if (pruneExpired)
+                    hostClientVisibleUntilTickBySyncId.Remove(mobSyncId);
+
+                return false;
+            }
+        }
+
+        private static void TryRecoverClientSyncMobLifeAfterLocalDamage(Mob? mob, int fallbackLife)
+        {
+            if (mob == null || mob.destroyed)
+                return;
+            if (BossSyncHelpers.IsBossMob(mob))
+                return;
+
+            var net = GameMenu.NetRef;
+            if (!IsClient(net) || !IsSyncMob(mob))
+                return;
+
+            try
+            {
+                if (mob.life <= 0)
+                    mob.life = System.Math.Max(1, fallbackLife);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryApplyHostClientVisibilityLease(Mob mob)
+        {
+            if (mob == null)
+                return;
+            if (!TryGetMobSyncId(mob, out var syncId) || syncId < 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            if (!HasActiveHostClientVisibilityLease(syncId, now, pruneExpired: true))
+                return;
+
+            try
+            {
+                var wasOutOfGame = mob.isOutOfGame;
+                mob.isOnScreen = true;
+                if (mob.onScreenRecent < 180.0)
+                    mob.onScreenRecent = 180.0;
+                mob.isOutOfGame = false;
+                mob.lastOutOfGame = false;
+                if (wasOutOfGame)
+                    mob.onOutOfGameChange();
+            }
+            catch
+            {
+            }
         }
 
         private static bool TryBuildHostMobStateDeltaSnapshot(
@@ -3696,6 +3786,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (states == null || states.Count == 0)
                 return;
 
+            var hostVisibilityLeaseUntilTick = OffsetTimestampBySeconds(Stopwatch.GetTimestamp(), HostClientDrawVisibilityHoldSeconds);
             s_clientAffectAppliesScratch.Clear();
             lock (Sync)
             {
@@ -3708,6 +3799,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         continue;
                     if (string.IsNullOrWhiteSpace(state.StatePayload))
                         continue;
+
+                    if (state.Index >= 0)
+                        hostClientVisibleUntilTickBySyncId[state.Index] = hostVisibilityLeaseUntilTick;
 
                     s_clientAffectAppliesScratch.Add(new PendingClientAffectApply(mob, state.StatePayload));
                 }
@@ -4084,69 +4178,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (TryGetMobSyncId(mob, out var drawSyncId) && drawSyncId >= 0)
             {
-                if (draw.IsOnScreen && !draw.IsOutOfGame)
+                if (!draw.IsOutOfGame)
                 {
                     hostClientVisibleUntilTickBySyncId[drawSyncId] =
                         OffsetTimestampBySeconds(Stopwatch.GetTimestamp(), HostClientDrawVisibilityHoldSeconds);
+
+                    if (draw.IsOnScreen)
+                        TryWakeMobForForcedSimulation(mob);
                 }
                 else
                 {
                     hostClientVisibleUntilTickBySyncId.Remove(drawSyncId);
                 }
-            }
-
-            var wasOutOfGame = true;
-            try
-            {
-                wasOutOfGame = mob.isOutOfGame;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                mob.isOnScreen = draw.IsOnScreen;
-                if (draw.IsOnScreen)
-                {
-                    var refreshFrames = 1200.0;
-                    if (mob.onScreenRecent < refreshFrames)
-                        mob.onScreenRecent = refreshFrames;
-                }
-                else
-                {
-                    mob.onScreenRecent = 0.0;
-                }
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                mob.isOutOfGame = draw.IsOutOfGame;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                mob.lastOutOfGame = draw.IsOutOfGame;
-            }
-            catch
-            {
-            }
-
-            if (wasOutOfGame == draw.IsOutOfGame)
-                return;
-
-            try
-            {
-                mob.onOutOfGameChange();
-            }
-            catch
-            {
             }
         }
 
@@ -4920,6 +4963,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return;
 
             MobSyncTrace.LogRecvDies(net.IsHost ? "diesOnHost" : "diesOnClient", dies);
+
+            // Host is authoritative for mob death. Ignore remote client die packets.
+            if (net.IsHost)
+                return;
+
             ApplyIncomingMobDies(dies);
         }
 
@@ -4996,6 +5044,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             var net = GameMenu.NetRef;
             var isHost = IsHost(net);
+            var hostVisibilityLeaseUntilTick = isHost
+                ? OffsetTimestampBySeconds(Stopwatch.GetTimestamp(), HostClientDrawVisibilityHoldSeconds)
+                : 0L;
             s_pendingMobHitAppliesScratch.Clear();
 
             lock (Sync)
@@ -5029,6 +5080,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var forceDie = targetLife <= 0 && prevLife > 0;
                     var syncId = -1;
                     TryGetMobSyncId(mob, out syncId);
+                    if (isHost && syncId >= 0)
+                        hostClientVisibleUntilTickBySyncId[syncId] = hostVisibilityLeaseUntilTick;
                     MobSyncTrace.LogIncomingHitApply(syncId, hit.Hp, hit.UserId, replaySpecialHit, forceDie);
                     s_pendingMobHitAppliesScratch.Add(new PendingMobHitApply(
                         mob,
@@ -5047,6 +5100,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var mob = update.Mob;
                 if (mob == null)
                     continue;
+
+                if (isHost)
+                    TryWakeMobForForcedSimulation(mob);
 
                 var appliedLife = update.TargetLife;
                 if (update.ReplaySpecialHit)

@@ -7,12 +7,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientAffectResendSeconds = 0.675;
         private const double ClientAnimPayloadRefreshSeconds = 0.33;
         private const int ParsedAnimPayloadCacheLimit = 1024;
-        private const double ClientDrawKeepAliveSeconds = 2.5;
-        private const double HostClientDrawVisibilityHoldSeconds = 3.2;
+        private const double ClientDrawKeepAliveSeconds = 1.0;
+        private const double HostClientDrawVisibilityHoldSeconds = 8.0;
         private const double ClientInterpolationAlpha = 0.70;
-        private const double MobSyncDistance = 20;
+        private const double MobSyncDistance = 256.0;
         private const double MobSyncDistanceSq = MobSyncDistance * MobSyncDistance;
-        private const double MobDrawNearDistance = 20;
+        private const double MobDrawNearDistance = 256.0;
         private const double MobDrawNearDistanceSq = MobDrawNearDistance * MobDrawNearDistance;
         private const double ClientAiLockSeconds = 0.3;
         private const double ClientAiLockRefreshSeconds = 0.125;
