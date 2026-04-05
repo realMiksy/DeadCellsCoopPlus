@@ -1,7 +1,5 @@
-using System.Diagnostics;
 using System.Globalization;
 using DeadCellsMultiplayerMod;
-using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 
 public sealed partial class NetNode
 {
@@ -452,9 +450,7 @@ public sealed partial class NetNode
             return;
         }
 
-        var t0 = Stopwatch.GetTimestamp();
         var textLine = MobWireCodec.BuildMobStatesLine(states);
-        MobSyncProfiler.AddWireEncode(Stopwatch.GetTimestamp() - t0);
         _ = SendLineSafe(textLine);
     }
 

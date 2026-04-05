@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Threading.Tasks;
 using dc;
 using dc.en;
 using dc.h2d;
@@ -72,6 +73,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly List<PendingClientAffectApply> s_clientAffectAppliesScratch = new();
         private static readonly List<PendingHostStateApply> s_hostStateAppliesScratch = new();
         private static readonly List<PendingMobHitApply> s_pendingMobHitAppliesScratch = new();
+        private static readonly List<NetNode.MobHit> s_deferredMobHitsScratch = new();
+        private static readonly List<NetNode.MobHit> s_mobHitMergeScratch = new();
         private static readonly List<NetNode.MobDraw> s_drawsScratch = new();
         private static readonly List<Mob> s_dieVictimsScratch = new();
         private static readonly HashSet<Mob> s_dieVictimDedupScratch = new(ReferenceEqualityComparer.Instance);
@@ -405,42 +408,24 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (IsHost(net))
             {
-                ConsumeIncomingClientMobStates(net);
-                ConsumeIncomingMobDraws(net);
-                ConsumeIncomingMobDies(net);
-                ConsumeIncomingMobHits(net);
+                RunHostIncomingFrameConsumeAsync(net).GetAwaiter().GetResult();
                 if (hasTrackedMobs)
-                {
-                    var t0 = Stopwatch.GetTimestamp();
                     TrySendHostMobStateDeltaBatchPreUpdate(net);
-                    MobSyncProfiler.AddFrameBatch(Stopwatch.GetTimestamp() - t0);
-                }
 
-                MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
                 return;
             }
 
             if (IsClient(net))
             {
-                ConsumeIncomingHostMobStates(net);
-                ConsumeIncomingHostMobAttacks(net);
-                ConsumeIncomingMobDies(net);
-                ConsumeIncomingMobHits(net);
+                RunClientIncomingFrameConsumeAsync(net).GetAwaiter().GetResult();
                 if (hasTrackedMobs)
                 {
                     if (!TryCaptureTrackedMobsForBatch(out var trackedMobCount))
-                    {
-                        MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
                         return;
-                    }
 
                     var now = Stopwatch.GetTimestamp();
-                    var t0 = Stopwatch.GetTimestamp();
                     TrySendClientMobBatchesNetFrame(net, now);
-                    MobSyncProfiler.AddFrameBatch(Stopwatch.GetTimestamp() - t0);
                 }
-
-                MobSyncProfiler.TickFrame(ModEntry.Instance?.Logger);
             }
         }
 
@@ -559,9 +544,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (IsClient(net) && IsSyncMob(self))
             {
                 orig(self);
-                var t0 = Stopwatch.GetTimestamp();
                 ApplyInterpolatedState(self);
-                MobSyncProfiler.AddFixedApply(Stopwatch.GetTimestamp() - t0);
                 return;
             }
 
@@ -577,11 +560,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 orig(self);
                 if (IsClient(net) && IsSyncMob(self))
-                {
-                    var t0 = Stopwatch.GetTimestamp();
                     ApplyClientAnimationStateBeforeUpdate(self);
-                    MobSyncProfiler.AddPostAnim(Stopwatch.GetTimestamp() - t0);
-                }
 
                 return;
             }

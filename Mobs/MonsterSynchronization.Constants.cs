@@ -2,6 +2,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 {
     public partial class MobsSynchronization
     {
+        /// <summary>When true, process at most <see cref="MobSyncChunkedHitsPerFrameMax"/> mob hits per frame; remainder carries to next frame (same thread).</summary>
+        private const bool MobSyncChunkedHitsEnabled = false;
+
+        /// <summary>When <see cref="MobSyncChunkedHitsEnabled"/>, max hits applied per frame.</summary>
+        private const int MobSyncChunkedHitsPerFrameMax = 64;
+
         private const double HostPayloadRefreshSeconds = 0.72;
         private const double ClientAffectSampleSeconds = 0.40;
         private const double ClientAffectResendSeconds = 0.675;

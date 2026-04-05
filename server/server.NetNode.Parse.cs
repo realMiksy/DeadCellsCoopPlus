@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using DeadCellsMultiplayerMod.Interaction;
 using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
@@ -217,13 +216,9 @@ public sealed partial class NetNode
 
     private static List<MobStateSnapshot> ParseMobStatesPayload(string payload)
     {
-        var t0 = Stopwatch.GetTimestamp();
         var states = new List<MobStateSnapshot>();
         if (string.IsNullOrWhiteSpace(payload))
-        {
-            MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
             return states;
-        }
 
         var entries = payload.Split(';', StringSplitOptions.RemoveEmptyEntries);
         foreach (var entry in entries)
@@ -251,7 +246,6 @@ public sealed partial class NetNode
             states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload));
         }
 
-        MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - t0);
         return states;
     }
 

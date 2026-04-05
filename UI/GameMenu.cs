@@ -1084,35 +1084,36 @@ namespace DeadCellsMultiplayerMod
 
         private static void StartHostServerOnly(bool bindAnyAddress = false)
         {
-            // try
-            // {
-            if (ModEntry.Instance == null)
+            try
             {
-                _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
-                return;
-            }
+                if (ModEntry.Instance == null)
+                {
+                    _log?.Warning("[NetMod] ModEntry instance unavailable for host start");
+                    return;
+                }
 
-            if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
-            {
+                if (NetRef != null && NetRef.IsAlive && NetRef.IsHost)
+                {
+                    _waitingForHost = false;
+                    return;
+                }
+
+                if (_menuTransport == ConnectionTransport.Steam)
+                {
+                    ModEntry.Instance.StartSteamHostFromMenu(_mpPort);
+                }
+                else
+                {
+                    var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
+                    ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
+                }
+
                 _waitingForHost = false;
-                return;
             }
-
-            if (_menuTransport == ConnectionTransport.Steam)
+            catch (Exception ex)
             {
-                ModEntry.Instance.StartSteamHostFromMenu(_mpPort);
+                _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
             }
-            else
-            {
-                var hostIp = bindAnyAddress ? "0.0.0.0" : _mpIp;
-                ModEntry.Instance.StartHostFromMenu(hostIp, _mpPort);
-            }
-            _waitingForHost = false;
-            // }
-            // catch (Exception ex)
-            // {
-            //     _log?.Warning("[NetMod] Host start failed: {Message}", ex.Message);
-            // }
         }
 
         private static void StartHostRun(TitleScreen screen)

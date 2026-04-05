@@ -1216,11 +1216,31 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void ConsumeIncomingMobHits(NetNode net)
         {
-            if (!net.TryConsumeMobHits(out var hits))
+            s_mobHitMergeScratch.Clear();
+            s_mobHitMergeScratch.AddRange(s_deferredMobHitsScratch);
+            s_deferredMobHitsScratch.Clear();
+
+            if (net.TryConsumeMobHits(out var incoming) && incoming != null && incoming.Count > 0)
+                s_mobHitMergeScratch.AddRange(incoming);
+
+            if (s_mobHitMergeScratch.Count == 0)
                 return;
 
-            MobSyncTrace.LogRecvHits(net.IsHost ? "hitsOnHost" : "hitsOnClient", hits);
-            ApplyIncomingMobHits(hits);
+            MobSyncTrace.LogRecvHits(net.IsHost ? "hitsOnHost" : "hitsOnClient", s_mobHitMergeScratch);
+
+            var reResolve = MobSyncChunkedHitsEnabled;
+            if (MobSyncChunkedHitsEnabled && s_mobHitMergeScratch.Count > MobSyncChunkedHitsPerFrameMax)
+            {
+                var n = s_mobHitMergeScratch.Count;
+                var take = MobSyncChunkedHitsPerFrameMax;
+                for (int i = take; i < n; i++)
+                    s_deferredMobHitsScratch.Add(s_mobHitMergeScratch[i]);
+                ApplyIncomingMobHits(s_mobHitMergeScratch, 0, take, reResolve);
+            }
+            else
+            {
+                ApplyIncomingMobHits(s_mobHitMergeScratch, 0, s_mobHitMergeScratch.Count, reResolve);
+            }
         }
 
         private static void ConsumeIncomingMobDies(NetNode net)
@@ -1303,9 +1323,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             s_dieVictimsScratch.Clear();
         }
 
-        private static void ApplyIncomingMobHits(IReadOnlyList<NetNode.MobHit> hits)
+        private static void ApplyIncomingMobHits(IReadOnlyList<NetNode.MobHit> hits, bool reResolveMobBySyncIdOnApply)
         {
             if (hits == null || hits.Count == 0)
+                return;
+            ApplyIncomingMobHits(hits, 0, hits.Count, reResolveMobBySyncIdOnApply);
+        }
+
+        private static void ApplyIncomingMobHits(IReadOnlyList<NetNode.MobHit> hits, int start, int count, bool reResolveMobBySyncIdOnApply)
+        {
+            if (hits == null || count <= 0)
+                return;
+
+            var end = start + count;
+            if (start < 0 || end > hits.Count)
                 return;
 
             var net = GameMenu.NetRef;
@@ -1318,7 +1349,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lock (Sync)
             {
                 PruneInvalidTrackedMobsLocked();
-                for (int i = 0; i < hits.Count; i++)
+                for (int i = start; i < end; i++)
                 {
                     var hit = hits[i];
                     if (isHost && !IsKnownRemoteHitSenderOnHost(net, hit.UserId))
@@ -1363,7 +1394,19 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             for (int i = 0; i < s_pendingMobHitAppliesScratch.Count; i++)
             {
                 var update = s_pendingMobHitAppliesScratch[i];
-                var mob = update.Mob;
+                Mob? mob;
+                if (reResolveMobBySyncIdOnApply && update.SyncId >= 0)
+                {
+                    lock (Sync)
+                    {
+                        mob = ResolveMobBySyncIdLocked(update.SyncId);
+                    }
+                }
+                else
+                {
+                    mob = update.Mob;
+                }
+
                 if (mob == null)
                     continue;
 

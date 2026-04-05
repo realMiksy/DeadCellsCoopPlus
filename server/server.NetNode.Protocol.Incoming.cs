@@ -1,9 +1,7 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using DeadCellsMultiplayerMod;
 using DeadCellsMultiplayerMod.Interaction;
-using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
 
 public sealed partial class NetNode
 {
@@ -542,11 +540,9 @@ public sealed partial class NetNode
         if (line.StartsWith("MOBSTATE2|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["MOBSTATE2|".Length..].TrimEnd('\r', '\n');
-            var tParse = Stopwatch.GetTimestamp();
             var parsedStates = new List<MobStateSnapshot>();
             if (MobWireBinary.TryParseMobStatesBase64(payload, parsedStates))
             {
-                MobSyncProfiler.AddWireParse(Stopwatch.GetTimestamp() - tParse);
                 lock (_sync)
                 {
                     if (_role == NetRole.Host)
