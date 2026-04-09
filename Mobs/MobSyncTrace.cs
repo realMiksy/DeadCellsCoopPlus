@@ -43,6 +43,20 @@ internal static class MobSyncTrace
             maxId);
     }
 
+    public static void LogSendMovesBatch(string role, IReadOnlyList<NetNode.MobMoveSnapshot> moves)
+    {
+        if (!Enabled || moves == null || moves.Count == 0)
+            return;
+
+        MinMaxSyncId(moves, static m => m.Index, out var minId, out var maxId);
+        Log.Information(
+            "[MobSync] в†’ SEND moves {Role} count={Count} syncIdMin={SyncIdMin} syncIdMax={SyncIdMax}",
+            role,
+            moves.Count,
+            minId,
+            maxId);
+    }
+
     public static void LogRecvStates(string context, IReadOnlyList<NetNode.MobStateSnapshot> states)
     {
         if (!Enabled || states == null || states.Count == 0)
@@ -67,6 +81,20 @@ internal static class MobSyncTrace
             "[MobSync] ← RECV attacks {Context} count={Count} syncIdMin={SyncIdMin} syncIdMax={SyncIdMax}",
             context,
             attacks.Count,
+            minId,
+            maxId);
+    }
+
+    public static void LogRecvMoves(string context, IReadOnlyList<NetNode.MobMoveSnapshot> moves)
+    {
+        if (!Enabled || moves == null || moves.Count == 0)
+            return;
+
+        MinMaxSyncId(moves, static m => m.Index, out var minId, out var maxId);
+        Log.Information(
+            "[MobSync] в†ђ RECV moves {Context} count={Count} syncIdMin={SyncIdMin} syncIdMax={SyncIdMax}",
+            context,
+            moves.Count,
             minId,
             maxId);
     }

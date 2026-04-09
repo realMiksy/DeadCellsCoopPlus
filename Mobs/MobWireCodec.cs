@@ -14,9 +14,6 @@ internal static class MobWireCodec
     private const char EntrySep = ';';
     private const char EventSep = '\u00A7';
 
-    /// <summary>Hard cap on mob state entries per line (see MobsSync optimization plan).</summary>
-    internal const int MaxMobStateSnapshotsPerWireLine = 128;
-
     private static readonly ThreadLocal<StringBuilder> MobLineBuilder = new(() => new StringBuilder(4096));
 
     public static string BuildMobStatesLine(IReadOnlyList<NetNode.MobStateSnapshot> states)
@@ -36,11 +33,7 @@ internal static class MobWireCodec
         sb.Append("MOBMOVE|");
         if (moves != null)
         {
-            var limit = moves.Count;
-            if (limit > MaxMobStateSnapshotsPerWireLine)
-                limit = MaxMobStateSnapshotsPerWireLine;
-
-            for (int i = 0; i < limit; i++)
+            for (int i = 0; i < moves.Count; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -68,11 +61,7 @@ internal static class MobWireCodec
         sb.Append("MOBCHARGE|");
         if (charges != null)
         {
-            var limit = charges.Count;
-            if (limit > MaxMobStateSnapshotsPerWireLine)
-                limit = MaxMobStateSnapshotsPerWireLine;
-
-            for (int i = 0; i < limit; i++)
+            for (int i = 0; i < charges.Count; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -118,11 +107,7 @@ internal static class MobWireCodec
         sb.Append("MOBEVENT|");
         if (updates != null)
         {
-            var limit = updates.Count;
-            if (limit > MaxMobStateSnapshotsPerWireLine)
-                limit = MaxMobStateSnapshotsPerWireLine;
-
-            for (int i = 0; i < limit; i++)
+            for (int i = 0; i < updates.Count; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -169,11 +154,7 @@ internal static class MobWireCodec
         sb.Append("MOBDRAW|");
         if (draws != null)
         {
-            var limit = draws.Count;
-            if (limit > MaxMobStateSnapshotsPerWireLine)
-                limit = MaxMobStateSnapshotsPerWireLine;
-
-            for (int i = 0; i < limit; i++)
+            for (int i = 0; i < draws.Count; i++)
             {
                 if (i > 0)
                     sb.Append(EntrySep);
@@ -204,11 +185,7 @@ internal static class MobWireCodec
         if (states == null)
             return;
 
-        var limit = states.Count;
-        if (limit > MaxMobStateSnapshotsPerWireLine)
-            limit = MaxMobStateSnapshotsPerWireLine;
-
-        for (int i = 0; i < limit; i++)
+        for (int i = 0; i < states.Count; i++)
         {
             if (i > 0)
                 sb.Append(EntrySep);
@@ -252,8 +229,8 @@ internal static class MobWireBinary
         try
         {
             var n = states.Count;
-            if (n > MobWireCodec.MaxMobStateSnapshotsPerWireLine)
-                n = MobWireCodec.MaxMobStateSnapshotsPerWireLine;
+            if (n > ushort.MaxValue)
+                n = ushort.MaxValue;
 
             using var ms = new MemoryStream(64 + n * 96);
             using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);

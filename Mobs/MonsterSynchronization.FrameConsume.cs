@@ -25,6 +25,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             ConsumeIncomingHostMobStates(net);
             await Task.Yield();
+            ConsumeIncomingHostMobMoves(net);
+            await Task.Yield();
             ConsumeIncomingHostMobAttacks(net);
             await Task.Yield();
             ConsumeIncomingMobDies(net);
