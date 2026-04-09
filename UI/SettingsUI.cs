@@ -335,6 +335,14 @@ public class SettingsUI :
             Ref<bool>.From(ref mobsSyncTraceNow),
             widgetParent);
 
+        bool showPerfLogsNow = MultiplayerSettingsStorage.ShowPerfLogs;
+        self.addToggleWidget(
+            GameMenu.Localize("Show perf logs").AsHaxeString(),
+            GameMenu.Localize("Controls threshold-based [Perf] hitch and slowdown logging.").AsHaxeString(),
+            new HlFunc<bool>(ToggleShowPerfLogsSetting),
+            Ref<bool>.From(ref showPerfLogsNow),
+            widgetParent);
+
         var perkChoices = BuildDebugPerkChoices();
         var selectedPerkIndex = ResolveCurrentDebugPerkIndex(perkChoices);
         var selectedPerk = perkChoices[selectedPerkIndex];
@@ -535,6 +543,13 @@ public class SettingsUI :
     {
         var enabled = !MultiplayerSettingsStorage.DebugMobsSyncTrace;
         MultiplayerSettingsStorage.DebugMobsSyncTrace = enabled;
+        return enabled;
+    }
+
+    private static bool ToggleShowPerfLogsSetting()
+    {
+        var enabled = !MultiplayerSettingsStorage.ShowPerfLogs;
+        MultiplayerSettingsStorage.ShowPerfLogs = enabled;
         return enabled;
     }
 

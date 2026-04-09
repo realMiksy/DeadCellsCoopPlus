@@ -33,7 +33,7 @@ internal static class RuntimeHitchWatch
 
     internal static void LogSlow(ILogger? log, string key, double elapsedMs, string? details = null)
     {
-        if (log == null)
+        if (log == null || !MultiplayerSettingsStorage.ShowPerfLogs)
             return;
 
         if (!TryEnterLogWindow(key, out var suppressed))
@@ -61,7 +61,7 @@ internal static class RuntimeHitchWatch
 
     internal static void LogCount(ILogger? log, string key, int count, int threshold, string? details = null)
     {
-        if (log == null || count < threshold)
+        if (log == null || count < threshold || !MultiplayerSettingsStorage.ShowPerfLogs)
             return;
 
         if (!TryEnterLogWindow(key, out var suppressed))
