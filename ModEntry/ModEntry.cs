@@ -80,6 +80,12 @@ namespace DeadCellsMultiplayerMod
         public static string?[] clientSkins = new string?[NetNode.MaxClientSlots];
         public static string?[] clientHeadSkins = new string?[NetNode.MaxClientSlots];
         private static bool[] pendingClientHeadRecreate = new bool[NetNode.MaxClientSlots];
+        private static string?[] clientLastBodyAnims = new string?[NetNode.MaxClientSlots];
+        private static int?[] clientLastBodyAnimQueues = new int?[NetNode.MaxClientSlots];
+        private static bool?[] clientLastBodyAnimGs = new bool?[NetNode.MaxClientSlots];
+        private static string?[] clientLastHeadAnims = new string?[NetNode.MaxClientSlots];
+        private static int[] clientLastDirs = new int[NetNode.MaxClientSlots];
+        private static bool[] clientLastDownedOffsets = new bool[NetNode.MaxClientSlots];
         public static Hero me = null!;
         public static GhostHero _ghost = null!;
 
@@ -292,6 +298,12 @@ namespace DeadCellsMultiplayerMod
                 clientSkins[i] = null;
                 clientHeadSkins[i] = null;
                 pendingClientHeadRecreate[i] = false;
+                clientLastBodyAnims[i] = null;
+                clientLastBodyAnimQueues[i] = null;
+                clientLastBodyAnimGs[i] = null;
+                clientLastHeadAnims[i] = null;
+                clientLastDirs[i] = 0;
+                clientLastDownedOffsets[i] = false;
                 rLastX[i] = 0;
                 rLastY[i] = 0;
             }
@@ -300,8 +312,6 @@ namespace DeadCellsMultiplayerMod
         private static string BuildRemoteLabel(int remoteId, string? username)
         {
             var clean = string.IsNullOrWhiteSpace(username) ? "Guest" : username.Trim();
-            if (remoteId > 0)
-                return $"{clean}";
             return clean;
         }
 

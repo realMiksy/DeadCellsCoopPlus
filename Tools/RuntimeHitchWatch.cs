@@ -25,6 +25,7 @@ internal static class RuntimeHitchWatch
     internal const double InteractionSlowThresholdMs = 4.0;
     internal const double GhostRuntimeSlowThresholdMs = 4.0;
     internal const double GhostRuntimeStepSlowThresholdMs = 2.0;
+    internal static bool Enabled => MultiplayerSettingsStorage.ShowPerfLogs;
 
     internal static long Start() => Stopwatch.GetTimestamp();
 

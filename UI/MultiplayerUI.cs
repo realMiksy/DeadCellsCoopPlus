@@ -33,6 +33,11 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             public FlowBox LabelBox { get; }
             public dc.h2d.Text? LabelText { get; set; }
             public string? LastLabel { get; set; }
+            public int LastLife { get; set; } = int.MinValue;
+            public int LastMaxLife { get; set; } = int.MinValue;
+            public int LastLif { get; set; } = int.MinValue;
+            public int LastBonusLife { get; set; } = int.MinValue;
+            public int LastRecover { get; set; } = int.MinValue;
 
             public LifeSlot(int slotIndex, dc.ui.hud.LifeBar lifeBar, FlowBox container, FlowBox labelBox)
             {
@@ -259,7 +264,7 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
                 if (string.IsNullOrWhiteSpace(displayName))
                     displayName = "Guest";
                 UpdateSlotLabel(slot, displayName);
-                UpdateLifeBar(slot.LifeBar, remote.Life, remote.MaxLife, remote.Lif, remote.BonusLife, remote.Recover);
+                UpdateLifeBar(slot, remote.Life, remote.MaxLife, remote.Lif, remote.BonusLife, remote.Recover);
                 _slotActive[slotIndex] = true;
             }
 
@@ -333,12 +338,27 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
             }
         }
 
-        private static void UpdateLifeBar(dc.ui.hud.LifeBar lifeBar, int max, int maxLife, int lif, int bonusLife, int recover)
+        private static void UpdateLifeBar(LifeSlot slot, int max, int maxLife, int lif, int bonusLife, int recover)
         {
+            if (slot.LastLife == max &&
+                slot.LastMaxLife == maxLife &&
+                slot.LastLif == lif &&
+                slot.LastBonusLife == bonusLife &&
+                slot.LastRecover == recover)
+            {
+                return;
+            }
+
+            var lifeBar = slot.LifeBar;
             lifeBar.init(max, maxLife);
             lifeBar.curState.life = (double)lif;
             lifeBar.curState.bonusLife = (double)bonusLife;
             lifeBar.curState.recover = (double)recover;
+            slot.LastLife = max;
+            slot.LastMaxLife = maxLife;
+            slot.LastLif = lif;
+            slot.LastBonusLife = bonusLife;
+            slot.LastRecover = recover;
         }
 
 
@@ -542,7 +562,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
         void IOnHeroUpdate.OnHeroUpdate(double dt)
         {
             UpdateSystemMessages(dt);
-            EnsureSystemMessageFlow();
             var hero = ModEntry.me;
             if (hero != null)
                 KingLifeUpdate(hero);

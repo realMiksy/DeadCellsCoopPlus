@@ -9,26 +9,43 @@ using dc.hl.types;
 using Hashlink.Virtuals;
 using dc.libs.heaps.slib;
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
-using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 namespace DeadCellsMultiplayerMod
 {
     public class GhostHero
     {
+        private sealed class LabelState
+        {
+            public dc.h2d.Text Label { get; }
+            public string TextValue { get; set; }
+            public int TextLength { get; set; }
+
+            public LabelState(dc.h2d.Text label, string textValue)
+            {
+                Label = label;
+                TextValue = textValue;
+                TextLength = textValue.Length;
+            }
+        }
+
         private const double NickScaleWindowed = 0.8;
         private const double NickScaleFullscreen = 0.5;
+        private const int WindowedDisplayMode = 0;
+        private const int FullscreenDisplayMode = 1;
+        private const int BorderlessDisplayMode = 2;
 
-        private readonly dc.pr.Game _game;
         private readonly Hero _me;
         private static ILogger? _log;
-        private readonly Dictionary<Entity, dc.h2d.Text> _labels = new();
+        private readonly Dictionary<Entity, LabelState> _labels = new();
+        private readonly List<Entity> _staleLabels = new();
+        private static int _cachedDisplayMode = int.MinValue;
+        private static int _cachedFullScreenMode = int.MinValue;
+        private static double _cachedNicknameScale = NickScaleWindowed;
 
         private const double RestartFrameIndex = 0;
 
         public int PlayerId { get; }
 
         public GhostKing king = null!;
-        private ModEntry modEntry = null!;
-        private MultiplayerUI UI { get; set; } = null!;
         public KingHead.Kinghead kinghead = null!;
 
 
@@ -40,10 +57,10 @@ namespace DeadCellsMultiplayerMod
         ModEntry entry)
         {
             PlayerId = playerId;
-            _game = game;
+            _ = game;
+            _ = entry;
             _me = me;
             _log = logger;
-            modEntry = entry;
         }
 
 
@@ -77,7 +94,6 @@ namespace DeadCellsMultiplayerMod
             }
             if (!string.IsNullOrWhiteSpace(label))
                 SetLabel(king, label);
-            this.UI = new MultiplayerUI(modEntry);
             king.spr._animManager.play("idle".AsHaxeString(), null, null).loop(null);
             return king;
         }
@@ -147,29 +163,34 @@ namespace DeadCellsMultiplayerMod
         public void SetLabel(Entity entity, string? text)
         {
             if (entity == null) return;
-            if (text == null) text = "Guest";
+            var normalizedText = string.IsNullOrWhiteSpace(text) ? "Guest" : text;
             if (_labels.TryGetValue(entity, out var existing))
             {
-                try
+                if (existing.Label.parent != null)
                 {
-                    if (existing.parent != null)
-                        existing.parent.removeChild(existing);
-                    existing.remove();
+                    if (!string.Equals(existing.TextValue, normalizedText, StringComparison.Ordinal))
+                    {
+                        try { existing.Label.set_text(normalizedText.AsHaxeString()); } catch { }
+                        existing.TextValue = normalizedText;
+                        existing.TextLength = normalizedText.Length;
+                    }
+                    return;
                 }
-                catch { }
+
+                try { existing.Label.remove(); } catch { }
                 _labels.Remove(entity);
             }
             _Assets _Assets = Assets.Class;
-            dc.h2d.Text text_h2d = _Assets.makeText(text.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
+            dc.h2d.Text text_h2d = _Assets.makeText(normalizedText.AsHaxeString(), dc.ui.Text.Class.COLORS.get("ST".AsHaxeString()), null, entity.spr);
             var targetScale = GetNicknameScale();
             text_h2d.y -= 80;
-            text_h2d.x -= 2.5 * text.Length;
+            text_h2d.x -= 2.5 * normalizedText.Length;
             text_h2d.font.size = 12;
             text_h2d.alpha = 0.8;
             text_h2d.scaleX = targetScale;
             text_h2d.scaleY = targetScale;
             text_h2d.textColor = 0;
-            _labels[entity] = text_h2d;
+            _labels[entity] = new LabelState(text_h2d, normalizedText);
         }
 
         public void UpdateLabels()
@@ -179,22 +200,20 @@ namespace DeadCellsMultiplayerMod
                 return;
             } 
             var targetScale = GetNicknameScale();
-            List<Entity>? toRemove = null;
+            _staleLabels.Clear();
             foreach (var pair in _labels)
             {
                 var entity = pair.Key;
-                var label = pair.Value;
+                var state = pair.Value;
+                var label = state.Label;
                 if (entity == null || label == null || entity.spr == null || label.parent == null)
                 {
-                    toRemove ??= new List<Entity>();
                     if (entity != null)
-                        toRemove.Add(entity);
+                        _staleLabels.Add(entity);
                     continue;
                 }
 
-                var textValue = label.text?.ToString() ?? string.Empty;
-                int len = textValue.Length;
-                var targetX = -2.5 * len;
+                var targetX = -2.5 * state.TextLength;
                 var targetY = -80;
                 if (entity.dir < 0)
                 {
@@ -210,10 +229,10 @@ namespace DeadCellsMultiplayerMod
                 label.y = targetY;
             }
 
-            if (toRemove == null) return;
-            for (int i = 0; i < toRemove.Count; i++)
+            if (_staleLabels.Count == 0) return;
+            for (int i = 0; i < _staleLabels.Count; i++)
             {
-                _labels.Remove(toRemove[i]);
+                _labels.Remove(_staleLabels[i]);
             }
         }
 
@@ -224,26 +243,39 @@ namespace DeadCellsMultiplayerMod
                 var win = dc.hxd.Window.Class.getInstance();
                 if (win != null)
                 {
+                    var displayMode = int.MinValue;
                     var sdlWin = win.window;
                     if (sdlWin != null)
-                    {
-                        var displayMode = sdlWin.displayMode;
-                        if (displayMode == 1 || displayMode == 2)
-                            return NickScaleFullscreen;
-                        if (displayMode == 0)
-                            return NickScaleWindowed;
-                    }
+                        displayMode = sdlWin.displayMode;
 
                     var mode = win.fullScreenMode;
-                    if (mode == 1 || mode == 2)
-                        return NickScaleFullscreen;
-                    if (mode == 0)
-                        return NickScaleWindowed;
+                    if (_cachedDisplayMode == displayMode && _cachedFullScreenMode == mode)
+                        return _cachedNicknameScale;
+
+                    _cachedDisplayMode = displayMode;
+                    _cachedFullScreenMode = mode;
+                    _cachedNicknameScale = ResolveNicknameScale(displayMode, mode);
+                    return _cachedNicknameScale;
                 }
             }
             catch
             {
             }
+
+            return _cachedNicknameScale;
+        }
+
+        private static double ResolveNicknameScale(int displayMode, int fullScreenMode)
+        {
+            if (displayMode == FullscreenDisplayMode || displayMode == BorderlessDisplayMode)
+                return NickScaleFullscreen;
+            if (displayMode == WindowedDisplayMode)
+                return NickScaleWindowed;
+
+            if (fullScreenMode == FullscreenDisplayMode || fullScreenMode == BorderlessDisplayMode)
+                return NickScaleFullscreen;
+            if (fullScreenMode == WindowedDisplayMode)
+                return NickScaleWindowed;
 
             return NickScaleWindowed;
         }

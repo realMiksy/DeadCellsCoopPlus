@@ -2,6 +2,11 @@ using DeadCellsMultiplayerMod.Interaction;
 
 public sealed partial class NetNode
 {
+    private static class EmptyListCache<T>
+    {
+        internal static readonly List<T> Instance = new(0);
+    }
+
     public bool TryGetRemote(out int remoteId, out double rx, out double ry)
     {
         lock (_sync)
@@ -26,7 +31,7 @@ public sealed partial class NetNode
         {
             if (_remotes.Count == 0)
             {
-                snapshot = new List<RemoteSnapshot>();
+                snapshot = EmptyListCache<RemoteSnapshot>.Instance;
                 return false;
             }
 
@@ -79,7 +84,7 @@ public sealed partial class NetNode
         {
             if (_remotes.Count == 0)
             {
-                snapshot = new List<RemoteWeaponSnapshot>();
+                snapshot = EmptyListCache<RemoteWeaponSnapshot>.Instance;
                 return false;
             }
 
@@ -102,15 +107,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingAttacks.Count == 0)
-            {
-                attacks = new List<RemoteAttack>();
-                return false;
-            }
-
-            attacks = new List<RemoteAttack>(_pendingAttacks);
-            _pendingAttacks.Clear();
-            return attacks.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingAttacks, out attacks);
         }
     }
 
@@ -118,15 +115,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingChatMessages.Count == 0)
-            {
-                messages = new List<RemoteChatMessage>();
-                return false;
-            }
-
-            messages = new List<RemoteChatMessage>(_pendingChatMessages);
-            _pendingChatMessages.Clear();
-            return messages.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingChatMessages, out messages);
         }
     }
 
@@ -204,7 +193,7 @@ public sealed partial class NetNode
     {
         if (pending.Count == 0)
         {
-            snapshot = new List<T>();
+            snapshot = EmptyListCache<T>.Instance;
             return false;
         }
 
@@ -217,15 +206,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingExitReadyStates.Count == 0)
-            {
-                states = new List<ExitReadyState>();
-                return false;
-            }
-
-            states = new List<ExitReadyState>(_pendingExitReadyStates);
-            _pendingExitReadyStates.Clear();
-            return states.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingExitReadyStates, out states);
         }
     }
 
@@ -233,15 +214,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingBossCineLevelIds.Count == 0)
-            {
-                levelIds = new List<string>();
-                return false;
-            }
-
-            levelIds = new List<string>(_pendingBossCineLevelIds);
-            _pendingBossCineLevelIds.Clear();
-            return levelIds.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingBossCineLevelIds, out levelIds);
         }
     }
 
@@ -249,15 +222,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingBossHeroTeleports.Count == 0)
-            {
-                events = new List<BossHeroTeleportEvent>();
-                return false;
-            }
-
-            events = new List<BossHeroTeleportEvent>(_pendingBossHeroTeleports);
-            _pendingBossHeroTeleports.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingBossHeroTeleports, out events);
         }
     }
 
@@ -265,15 +230,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingPlayerDownStates.Count == 0)
-            {
-                states = new List<PlayerDownState>();
-                return false;
-            }
-
-            states = new List<PlayerDownState>(_pendingPlayerDownStates);
-            _pendingPlayerDownStates.Clear();
-            return states.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingPlayerDownStates, out states);
         }
     }
 
@@ -281,15 +238,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingPlayerReviveRequests.Count == 0)
-            {
-                requests = new List<PlayerReviveRequest>();
-                return false;
-            }
-
-            requests = new List<PlayerReviveRequest>(_pendingPlayerReviveRequests);
-            _pendingPlayerReviveRequests.Clear();
-            return requests.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingPlayerReviveRequests, out requests);
         }
     }
 
@@ -297,15 +246,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterDoorEvents.Count == 0)
-            {
-                events = new List<InterDoorEvent>();
-                return false;
-            }
-
-            events = new List<InterDoorEvent>(_pendingInterDoorEvents);
-            _pendingInterDoorEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterDoorEvents, out events);
         }
     }
 
@@ -313,15 +254,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterElevatorEvents.Count == 0)
-            {
-                events = new List<InterElevatorEvent>();
-                return false;
-            }
-
-            events = new List<InterElevatorEvent>(_pendingInterElevatorEvents);
-            _pendingInterElevatorEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterElevatorEvents, out events);
         }
     }
 
@@ -329,15 +262,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterPressurePlateEvents.Count == 0)
-            {
-                events = new List<InterPressurePlateEvent>();
-                return false;
-            }
-
-            events = new List<InterPressurePlateEvent>(_pendingInterPressurePlateEvents);
-            _pendingInterPressurePlateEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterPressurePlateEvents, out events);
         }
     }
 
@@ -345,15 +270,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterTreasureChestEvents.Count == 0)
-            {
-                events = new List<InterTreasureChestEvent>();
-                return false;
-            }
-
-            events = new List<InterTreasureChestEvent>(_pendingInterTreasureChestEvents);
-            _pendingInterTreasureChestEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterTreasureChestEvents, out events);
         }
     }
 
@@ -361,15 +278,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterVineLadderEvents.Count == 0)
-            {
-                events = new List<InterVineLadderEvent>();
-                return false;
-            }
-
-            events = new List<InterVineLadderEvent>(_pendingInterVineLadderEvents);
-            _pendingInterVineLadderEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterVineLadderEvents, out events);
         }
     }
 
@@ -377,15 +286,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterTeleportEvents.Count == 0)
-            {
-                events = new List<InterTeleportEvent>();
-                return false;
-            }
-
-            events = new List<InterTeleportEvent>(_pendingInterTeleportEvents);
-            _pendingInterTeleportEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterTeleportEvents, out events);
         }
     }
 
@@ -393,15 +294,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterBreakableGroundEvents.Count == 0)
-            {
-                events = new List<InterBreakableGroundEvent>();
-                return false;
-            }
-
-            events = new List<InterBreakableGroundEvent>(_pendingInterBreakableGroundEvents);
-            _pendingInterBreakableGroundEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterBreakableGroundEvents, out events);
         }
     }
 
@@ -409,15 +302,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingBossRuneUpdateCells.Count == 0)
-            {
-                events = new List<InterBossRuneUpdateCellsEvent>();
-                return false;
-            }
-
-            events = new List<InterBossRuneUpdateCellsEvent>(_pendingBossRuneUpdateCells);
-            _pendingBossRuneUpdateCells.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingBossRuneUpdateCells, out events);
         }
     }
 
@@ -425,15 +310,7 @@ public sealed partial class NetNode
     {
         lock (_sync)
         {
-            if (_pendingInterPortalEvents.Count == 0)
-            {
-                events = new List<InterPortalEvent>();
-                return false;
-            }
-
-            events = new List<InterPortalEvent>(_pendingInterPortalEvents);
-            _pendingInterPortalEvents.Clear();
-            return events.Count > 0;
+            return TryConsumePendingListLocked(ref _pendingInterPortalEvents, out events);
         }
     }
 
@@ -443,7 +320,7 @@ public sealed partial class NetNode
         {
             if (_remotes.Count == 0)
             {
-                snapshot = new List<RemoteHpSnapshot>();
+                snapshot = EmptyListCache<RemoteHpSnapshot>.Instance;
                 return false;
             }
 
@@ -466,7 +343,7 @@ public sealed partial class NetNode
         {
             if (_remotes.Count == 0)
             {
-                snapshot = new List<RemoteUserSnapshot>();
+                snapshot = EmptyListCache<RemoteUserSnapshot>.Instance;
                 return false;
             }
 
@@ -542,6 +419,40 @@ public sealed partial class NetNode
             queueAnim = null;
             g = null;
             return false;
+        }
+    }
+
+    public bool TryGetRemoteUsername(int userId, out string? username)
+    {
+        lock (_sync)
+        {
+            if (userId > 0 && _remotes.TryGetValue(userId, out var state) && state.HasRemote)
+            {
+                username = state.Username;
+                return !string.IsNullOrWhiteSpace(username);
+            }
+
+            username = null;
+            return false;
+        }
+    }
+
+    public void CopyRemoteUserIdsTo(HashSet<int> target, bool includePrimary = true)
+    {
+        if (target == null)
+            return;
+
+        lock (_sync)
+        {
+            foreach (var state in _remotes.Values)
+            {
+                if (!state.HasRemote)
+                    continue;
+                if (!includePrimary && state.Id == _primaryRemoteId)
+                    continue;
+                if (state.Id > 0)
+                    target.Add(state.Id);
+            }
         }
     }
 }

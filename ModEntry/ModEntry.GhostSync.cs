@@ -449,19 +449,26 @@ namespace DeadCellsMultiplayerMod
                 }
 
                 if (useDownedOffset)
-                {
                     drawY -= DownedGhostBodyYOffsetPx;
-                    client._targetable = false;
-                }
-                else
+
+                if (clientLastDownedOffsets[index] != useDownedOffset)
                 {
-                    client._targetable = true;
+                    client._targetable = !useDownedOffset;
+                    clientLastDownedOffsets[index] = useDownedOffset;
                 }
 
-                client.setPosPixel(drawX, drawY);
-                client.dir = remote.Dir;
-                rLastX[index] = drawX;
-                rLastY[index] = drawY;
+                if (rLastX[index] != drawX || rLastY[index] != drawY)
+                {
+                    client.setPosPixel(drawX, drawY);
+                    rLastX[index] = drawX;
+                    rLastY[index] = drawY;
+                }
+
+                if (clientLastDirs[index] != remote.Dir)
+                {
+                    client.dir = remote.Dir;
+                    clientLastDirs[index] = remote.Dir;
+                }
 
                 var newLabel = BuildRemoteLabel(remote.Id, remote.Username);
                 if (!string.Equals(clientLabels[index], newLabel, StringComparison.Ordinal))
@@ -478,10 +485,17 @@ namespace DeadCellsMultiplayerMod
                             $"remoteId={remote.Id} slot={index} label={newLabel}"));
                 }
 
-                if (remote.HasAnim && !string.IsNullOrWhiteSpace(remote.Anim))
+                if (remote.HasAnim &&
+                    !string.IsNullOrWhiteSpace(remote.Anim) &&
+                    (!string.Equals(clientLastBodyAnims[index], remote.Anim, StringComparison.Ordinal) ||
+                     clientLastBodyAnimQueues[index] != remote.AnimQueue ||
+                     clientLastBodyAnimGs[index] != remote.AnimG))
                 {
                     var animStart = RuntimeHitchWatch.Start();
                     PlayGhostAnim(client, remote.Anim!, remote.AnimQueue, remote.AnimG);
+                    clientLastBodyAnims[index] = remote.Anim;
+                    clientLastBodyAnimQueues[index] = remote.AnimQueue;
+                    clientLastBodyAnimGs[index] = remote.AnimG;
                     playedAnims++;
                     LogGhostRuntimeStepIfSlow(
                         "ModEntry.ReceiveGhostCoords.PlayGhostAnim",
@@ -490,10 +504,13 @@ namespace DeadCellsMultiplayerMod
                             System.Globalization.CultureInfo.InvariantCulture,
                             $"remoteId={remote.Id} slot={index} anim={remote.Anim}"));
                 }
-                if(remote.HasHeadAnim && !string.IsNullOrWhiteSpace(remote.HeadAnim))
+                if (remote.HasHeadAnim &&
+                    !string.IsNullOrWhiteSpace(remote.HeadAnim) &&
+                    !string.Equals(clientLastHeadAnims[index], remote.HeadAnim, StringComparison.Ordinal))
                 {
                     var headAnimStart = RuntimeHitchWatch.Start();
                     PlayGhostHeadAnim(client, remote.HeadAnim);
+                    clientLastHeadAnims[index] = remote.HeadAnim;
                     playedHeadAnims++;
                     LogGhostRuntimeStepIfSlow(
                         "ModEntry.ReceiveGhostCoords.PlayGhostHeadAnim",
@@ -686,6 +703,14 @@ namespace DeadCellsMultiplayerMod
                 client.disposeGfx();
             }
             clients[slot] = null!;
+            clientLastBodyAnims[slot] = null;
+            clientLastBodyAnimQueues[slot] = null;
+            clientLastBodyAnimGs[slot] = null;
+            clientLastHeadAnims[slot] = null;
+            clientLastDirs[slot] = 0;
+            clientLastDownedOffsets[slot] = false;
+            rLastX[slot] = 0;
+            rLastY[slot] = 0;
 
             if (!clearIdentity)
                 return;
@@ -699,8 +724,6 @@ namespace DeadCellsMultiplayerMod
 
             clientIds[slot] = 0;
             clientLabels[slot] = null;
-            rLastX[slot] = 0;
-            rLastY[slot] = 0;
         }
 
         private void ReceiveGhostWeapons()

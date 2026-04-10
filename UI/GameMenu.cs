@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Reflection;
 using dc.pr;
 using dc.ui;
 using Newtonsoft.Json;
@@ -24,7 +25,10 @@ namespace DeadCellsMultiplayerMod
         private const int MaxSeed = 999_999;
         public static NetNode? NetRef { get; set; }
         private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+        private static readonly ConcurrentDictionary<MethodInfo, string> _mainThreadActionLabelCache = new();
         private static int _mainThreadQueueDepth;
+        private const int MainThreadQueueMaxActionsPerPump = 64;
+        private const double MainThreadQueueBudgetMs = 4.0;
 
         private static bool _menuHooksAttached;
         private static bool _addMenuHookRegistered;
@@ -176,6 +180,7 @@ namespace DeadCellsMultiplayerMod
         internal static void ProcessMainThreadQueue()
         {
             var hitchStart = RuntimeHitchWatch.Start();
+            var perfEnabled = RuntimeHitchWatch.Enabled;
             var startDepth = Volatile.Read(ref _mainThreadQueueDepth);
             var processed = 0;
             var slowActions = 0;
@@ -187,7 +192,7 @@ namespace DeadCellsMultiplayerMod
             {
                 Interlocked.Decrement(ref _mainThreadQueueDepth);
                 processed++;
-                var actionStart = RuntimeHitchWatch.Start();
+                var actionStart = perfEnabled ? RuntimeHitchWatch.Start() : 0;
                 try
                 {
                     action();
@@ -198,37 +203,50 @@ namespace DeadCellsMultiplayerMod
                 }
                 finally
                 {
-                    var actionLabel = DescribeMainThreadAction(action);
-                    var actionMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionStart);
-                    if (actionMs > maxActionMs)
+                    if (perfEnabled)
                     {
-                        maxActionMs = actionMs;
-                        maxActionLabel = actionLabel;
-                    }
+                        var actionMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionStart);
+                        string? actionLabel = null;
+                        if (actionMs > maxActionMs)
+                        {
+                            actionLabel = DescribeMainThreadAction(action);
+                            maxActionMs = actionMs;
+                            maxActionLabel = actionLabel;
+                        }
 
-                    if (actionMs >= RuntimeHitchWatch.MainThreadQueueActionSlowThresholdMs)
-                    {
-                        slowActions++;
-                        RuntimeHitchWatch.LogSlow(
-                            _log,
-                            $"GameMenu.MainThreadQueueAction:{actionLabel}",
-                            actionMs,
-                            string.Create(
-                                CultureInfo.InvariantCulture,
-                                $"action={actionLabel} processed={processed} startDepth={startDepth}"));
+                        if (actionMs >= RuntimeHitchWatch.MainThreadQueueActionSlowThresholdMs)
+                        {
+                            slowActions++;
+                            actionLabel ??= DescribeMainThreadAction(action);
+                            RuntimeHitchWatch.LogSlow(
+                                _log,
+                                $"GameMenu.MainThreadQueueAction:{actionLabel}",
+                                actionMs,
+                                string.Create(
+                                    CultureInfo.InvariantCulture,
+                                    $"action={actionLabel} processed={processed} startDepth={startDepth}"));
+                        }
                     }
                 }
+
+                if (processed >= MainThreadQueueMaxActionsPerPump)
+                    break;
+                if (RuntimeHitchWatch.GetElapsedMilliseconds(actionsStart) >= MainThreadQueueBudgetMs)
+                    break;
             }
             var actionsMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionsStart);
 
             var remainingDepth = Volatile.Read(ref _mainThreadQueueDepth);
             var observedDepth = System.Math.Max(startDepth, remainingDepth);
-            RuntimeHitchWatch.LogCount(
-                _log,
-                "GameMenu.MainThreadQueueDepth",
-                observedDepth,
-                RuntimeHitchWatch.MainThreadQueueDepthThreshold,
-                string.Create(CultureInfo.InvariantCulture, $"processed={processed} remaining={remainingDepth}"));
+            if (perfEnabled && observedDepth >= RuntimeHitchWatch.MainThreadQueueDepthThreshold)
+            {
+                RuntimeHitchWatch.LogCount(
+                    _log,
+                    "GameMenu.MainThreadQueueDepth",
+                    observedDepth,
+                    RuntimeHitchWatch.MainThreadQueueDepthThreshold,
+                    string.Create(CultureInfo.InvariantCulture, $"processed={processed} remaining={remainingDepth}"));
+            }
 
             if (actionsMs >= RuntimeHitchWatch.MainThreadQueueActionsSlowThresholdMs)
             {
@@ -258,11 +276,14 @@ namespace DeadCellsMultiplayerMod
                 return "null";
 
             var method = action.Method;
-            var declaringType = method.DeclaringType?.FullName;
-            if (!string.IsNullOrWhiteSpace(declaringType))
-                return $"{declaringType}.{method.Name}";
+            return _mainThreadActionLabelCache.GetOrAdd(method, static m =>
+            {
+                var declaringType = m.DeclaringType?.FullName;
+                if (!string.IsNullOrWhiteSpace(declaringType))
+                    return $"{declaringType}.{m.Name}";
 
-            return method.Name;
+                return m.Name;
+            });
         }
 
         public static void MarkInRun()

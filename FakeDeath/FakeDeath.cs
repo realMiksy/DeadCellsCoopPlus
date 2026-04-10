@@ -26,6 +26,10 @@ namespace DeadCellsMultiplayerMod
         private double _localDownedAnchorY;
         private const double DownedCorpseMaxDriftPx = 96.0;
         private const double DownedCorpseMaxDriftSq = DownedCorpseMaxDriftPx * DownedCorpseMaxDriftPx;
+        private readonly HashSet<int> _scratchRemoteActiveIds = new();
+        private readonly HashSet<int> _scratchActiveCorpseIds = new();
+        private readonly List<int> _scratchStaleRemoteIds = new();
+        private readonly List<int> _scratchStaleCorpseIds = new();
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
@@ -455,19 +459,8 @@ namespace DeadCellsMultiplayerMod
             if (net == null || userId <= 0)
                 return string.Empty;
 
-            if (net.TryGetRemoteUserSnapshots(out var users))
-            {
-                for (int i = 0; i < users.Count; i++)
-                {
-                    var user = users[i];
-                    if (user.Id != userId)
-                        continue;
-
-                    if (!string.IsNullOrWhiteSpace(user.Username))
-                        return user.Username.Trim();
-                    break;
-                }
-            }
+            if (net.TryGetRemoteUsername(userId, out var username) && !string.IsNullOrWhiteSpace(username))
+                return username.Trim();
 
             if (TryGetClientIndex(net.id, userId, out var slot))
             {
@@ -513,40 +506,33 @@ namespace DeadCellsMultiplayerMod
             if (_remoteDowned.Count == 0)
                 return;
 
-            var activeIds = new HashSet<int>();
+            _scratchRemoteActiveIds.Clear();
             var localId = net.id;
             if (localId > 0)
-                activeIds.Add(localId);
+                _scratchRemoteActiveIds.Add(localId);
 
-            if (net.TryGetRemoteUserSnapshots(out var users))
-            {
-                for (int i = 0; i < users.Count; i++)
-                {
-                    var id = users[i].Id;
-                    if (id > 0)
-                        activeIds.Add(id);
-                }
-            }
+            net.CopyRemoteUserIdsTo(_scratchRemoteActiveIds);
 
             for (int i = 0; i < clientIds.Length; i++)
             {
                 var id = clientIds[i];
                 if (id > 0)
-                    activeIds.Add(id);
+                    _scratchRemoteActiveIds.Add(id);
             }
 
-            var stale = new List<int>();
+            _scratchStaleRemoteIds.Clear();
             foreach (var pair in _remoteDowned)
             {
-                if (!activeIds.Contains(pair.Key))
-                    stale.Add(pair.Key);
+                if (!_scratchRemoteActiveIds.Contains(pair.Key))
+                    _scratchStaleRemoteIds.Add(pair.Key);
             }
 
-            for (int i = 0; i < stale.Count; i++)
+            for (int i = 0; i < _scratchStaleRemoteIds.Count; i++)
             {
-                DisposeRemoteDownedCine(stale[i]);
-                _remoteDowned.Remove(stale[i]);
-                _downedAnnouncements.Remove(stale[i]);
+                var staleId = _scratchStaleRemoteIds[i];
+                DisposeRemoteDownedCine(staleId);
+                _remoteDowned.Remove(staleId);
+                _downedAnnouncements.Remove(staleId);
             }
         }
 
@@ -571,7 +557,7 @@ namespace DeadCellsMultiplayerMod
 
             var localId = net.id;
             var localLevelId = GetCurrentLevelId();
-            var activeCorpseIds = new HashSet<int>();
+            _scratchActiveCorpseIds.Clear();
             foreach (var state in _remoteDowned.Values)
             {
                 if (state == null || state.UserId <= 0)
@@ -597,7 +583,7 @@ namespace DeadCellsMultiplayerMod
                     continue;
                 }
 
-                activeCorpseIds.Add(state.UserId);
+                _scratchActiveCorpseIds.Add(state.UserId);
                 var cine = EnsureRemoteDownedCine(state, client);
                 if (cine != null)
                 {
@@ -623,15 +609,15 @@ namespace DeadCellsMultiplayerMod
 
             if (_remoteDownedCines.Count > 0)
             {
-                var staleCorpseIds = new List<int>();
+                _scratchStaleCorpseIds.Clear();
                 foreach (var pair in _remoteDownedCines)
                 {
-                    if (!activeCorpseIds.Contains(pair.Key))
-                        staleCorpseIds.Add(pair.Key);
+                    if (!_scratchActiveCorpseIds.Contains(pair.Key))
+                        _scratchStaleCorpseIds.Add(pair.Key);
                 }
 
-                for (int i = 0; i < staleCorpseIds.Count; i++)
-                    DisposeRemoteDownedCine(staleCorpseIds[i]);
+                for (int i = 0; i < _scratchStaleCorpseIds.Count; i++)
+                    DisposeRemoteDownedCine(_scratchStaleCorpseIds[i]);
             }
         }
 
@@ -677,34 +663,28 @@ namespace DeadCellsMultiplayerMod
             if (_remoteDownedCines.Count == 0)
                 return;
 
-            var ids = new List<int>(_remoteDownedCines.Keys);
-            for (int i = 0; i < ids.Count; i++)
-                DisposeRemoteDownedCine(ids[i]);
+            _scratchStaleCorpseIds.Clear();
+            foreach (var id in _remoteDownedCines.Keys)
+                _scratchStaleCorpseIds.Add(id);
+
+            for (int i = 0; i < _scratchStaleCorpseIds.Count; i++)
+                DisposeRemoteDownedCine(_scratchStaleCorpseIds[i]);
         }
 
         private bool HasAliveRemoteTeammate(NetNode net)
         {
             var localId = net.id;
-            var activeIds = new HashSet<int>();
-
-            if (net.TryGetRemoteUserSnapshots(out var users))
-            {
-                for (int i = 0; i < users.Count; i++)
-                {
-                    var id = users[i].Id;
-                    if (id > 0 && id != localId)
-                        activeIds.Add(id);
-                }
-            }
+            _scratchRemoteActiveIds.Clear();
+            net.CopyRemoteUserIdsTo(_scratchRemoteActiveIds, includePrimary: false);
 
             for (int i = 0; i < clientIds.Length; i++)
             {
                 var id = clientIds[i];
                 if (id > 0 && id != localId)
-                    activeIds.Add(id);
+                    _scratchRemoteActiveIds.Add(id);
             }
 
-            if (activeIds.Count == 0)
+            if (_scratchRemoteActiveIds.Count == 0)
             {
                 if (_remoteDowned.Count > 0)
                     return false;
@@ -715,7 +695,7 @@ namespace DeadCellsMultiplayerMod
             }
 
             var localLevelId = GetCurrentLevelId();
-            foreach (var id in activeIds)
+            foreach (var id in _scratchRemoteActiveIds)
             {
                 if (!_remoteDowned.TryGetValue(id, out var downed))
                     return true;
