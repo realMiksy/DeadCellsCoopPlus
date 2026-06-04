@@ -1529,7 +1529,10 @@ namespace DeadCellsMultiplayerMod
 
             try
             {
-                instance.ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
+                // Broadcast the revived (not-downed) state on restart so the peer clears its stale
+                // remote-downed tracking; otherwise the host keeps pinning this player as a corpse
+                // and gates interactions (e.g. exit doors) as if still downed.
+                instance.ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: true);
             }
             catch
             {

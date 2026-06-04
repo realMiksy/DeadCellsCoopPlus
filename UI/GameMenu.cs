@@ -79,6 +79,11 @@ namespace DeadCellsMultiplayerMod
         private static DateTime _autoStartRetryAt = DateTime.MinValue;
         private const int DeathRestartCooldownMs = 1000;
         private static DateTime _deathRestartCooldownUntil = DateTime.MinValue;
+        // While a client full-run restart (from host seed) is pending, the host's freshly broadcast level
+        // graph for the restart level must NOT trigger an in-place reloadAfterBossRuneModif on the client:
+        // that collides with the queued launchGame restart and leaves the old downed hero / Game Over stuck.
+        private static long _clientRestartPendingUntilTicks;
+        private const int ClientRestartPendingTtlMs = 12000;
         private const string AutoStartMutexName = "DeadCellsMultiplayerMod.AutoStart";
         private static bool _mainMenuButtonAdded;
         private static bool _suppressAutoButton;
@@ -357,6 +362,24 @@ namespace DeadCellsMultiplayerMod
             {
                 _inActualRun = true;
             }
+            // The (re)started run's hero is up — the restart completed, so stop suppressing level reloads.
+            ClearClientRestartPending();
+        }
+
+        internal static void MarkClientRestartPending()
+        {
+            Volatile.Write(ref _clientRestartPendingUntilTicks, Environment.TickCount64 + ClientRestartPendingTtlMs);
+        }
+
+        internal static void ClearClientRestartPending()
+        {
+            Volatile.Write(ref _clientRestartPendingUntilTicks, 0);
+        }
+
+        internal static bool IsClientRestartPending()
+        {
+            var until = Volatile.Read(ref _clientRestartPendingUntilTicks);
+            return until != 0 && Environment.TickCount64 < until;
         }
 
         public static void SetRole(NetRole role)
@@ -489,6 +512,9 @@ namespace DeadCellsMultiplayerMod
 
         private static void QueueClientRestartFromHostSeed(int seed, string reason)
         {
+            // Set synchronously (before the queued action runs) so any level graph that arrives in the
+            // meantime is prevented from firing an in-place reload that would pre-empt this full restart.
+            MarkClientRestartPending();
             EnqueueMainThread(() =>
             {
                 ModEntry.ResetDownedPlayersForRestart();

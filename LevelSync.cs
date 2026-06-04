@@ -199,6 +199,28 @@ namespace DeadCellsMultiplayerMod
             });
         }
 
+        /// <summary>
+        /// In-place reloadAfterBossRuneModif keeps the current hero and only regenerates the level. It must be
+        /// suppressed while the local player is downed/Game Over or a full-run restart is pending, otherwise the
+        /// host's restart-level graph reloads the old downed run in place (no heal, Game Over stuck) or crashes
+        /// with a Null access .curCine — instead of letting the queued launchGame restart take over.
+        /// </summary>
+        private static bool ShouldSuppressClientLevelReload()
+        {
+            try
+            {
+                if (ModEntry.IsLocalPlayerDowned())
+                    return true;
+                if (GameMenu.IsClientRestartPending())
+                    return true;
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
         private static void TryTriggerLevelGraphReload(string graphLevelId, string payload)
         {
             if (string.IsNullOrWhiteSpace(graphLevelId) || string.IsNullOrWhiteSpace(payload))
@@ -207,6 +229,12 @@ namespace DeadCellsMultiplayerMod
             var net = GameMenu.NetRef;
             if (net == null || !net.IsAlive || net.IsHost)
                 return;
+
+            if (ShouldSuppressClientLevelReload())
+            {
+                _log?.Information("[NetMod] Skipping level-graph reload for {LevelId}: client downed/restart pending", graphLevelId);
+                return;
+            }
 
             var hero = ModEntry.me;
             var level = hero?._level;
@@ -270,6 +298,12 @@ namespace DeadCellsMultiplayerMod
             var net = GameMenu.NetRef;
             if (net == null || !net.IsAlive || net.IsHost)
                 return;
+
+            if (ShouldSuppressClientLevelReload())
+            {
+                _log?.Information("[NetMod] Skipping boss-rune reload for {LevelId}: client downed/restart pending", graphLevelId);
+                return;
+            }
 
             var hero = ModEntry.me;
             var level = hero?._level;
