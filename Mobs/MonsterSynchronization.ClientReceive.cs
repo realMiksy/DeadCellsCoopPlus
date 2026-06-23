@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using dc;
 using dc.en;
@@ -187,7 +186,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         state.Life,
                         state.MaxLife,
                         mergedAnimPayload,
-                        mergedStatePayload);
+                        mergedStatePayload,
+                        state.Time,
+                        state.Dx,
+                        state.Dy);
                 }
             }
 
@@ -243,7 +245,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                             previousTarget.Life,
                             previousTarget.MaxLife,
                             mergedAnimPayload,
-                            previousTarget.StatePayload);
+                            previousTarget.StatePayload,
+                            move.Time,
+                            move.Dx,
+                            move.Dy);
                     }
                 }
             }
@@ -408,21 +413,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             catch
             {
                 return 0;
-            }
-        }
-
-        private static virtual_a_t_uniqId_val_? TryGetDynAffectEntry(object? dynArray, int index)
-        {
-            if (dynArray is not ArrayObj ao || index < 0 || index >= ao.length)
-                return null;
-
-            try
-            {
-                return ao.getDyn(index) as virtual_a_t_uniqId_val_;
-            }
-            catch
-            {
-                return null;
             }
         }
 
@@ -676,6 +666,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 TryInvokeOldSkillChargeComplete(oldSkill);
                 oldSkill.execute(null);
+                lock (Sync)
+                {
+                    clientQueuedOldSkillMarkers.Remove(mob);
+                }
             }
             catch (Exception ex)
             {
@@ -985,7 +979,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (string.Equals(markerSkillId, incomingSkillId, StringComparison.Ordinal))
                 {
                     clientQueuedOldSkillMarkers.Remove(mob);
-                    return true;
+                    // Marker is only meaningful if the mob is still actively queued/charging this skill
+                    // (e.g. client AI fired it and host event would be a duplicate).
+                    // If the skill is not queued/charging, the marker is stale from our own replay
+                    // and the incoming host event is a fresh attack — do not skip.
+                    if (IsQueuedOrChargingOldSkillId(mob, incomingSkillId))
+                        return true;
+                    return false;
                 }
 
                 if (!IsQueuedOrChargingOldSkillId(mob, markerSkillId))
@@ -1051,6 +1051,13 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return true;
             if (TryGetCurrentClientNemesisTarget(mob, out target))
                 return true;
+
+            var detected = ResolveDetectedClientTargetEntity(mob);
+            if (detected != null)
+            {
+                target = detected;
+                return true;
+            }
 
             return false;
         }
@@ -1121,35 +1128,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             TrySetMobAttackTargetsExact(mob, target, attackDir, forceAttackDir: true);
-        }
-
-        private static void TrySetClientMobAttackFacingOnly(Mob mob, int targetUserId, int attackDir)
-        {
-            if (mob == null)
-                return;
-
-            var normalizedAttackDir = NormalizeDir(attackDir);
-            if (normalizedAttackDir != 0)
-            {
-                try { mob.dir = normalizedAttackDir; } catch { }
-                return;
-            }
-
-            var target = ResolveClientAttackTargetEntity(mob, targetUserId);
-            if (target == null)
-                return;
-
-            try
-            {
-                var mobX = GetWorldX(mob);
-                var targetX = GetWorldX(target);
-                var facing = targetX < mobX ? -1 : targetX > mobX ? 1 : NormalizeDir(mob.dir);
-                if (facing != 0)
-                    mob.dir = facing;
-            }
-            catch
-            {
-            }
         }
 
         private static Entity? ResolveClientAttackTargetEntity(Mob mob, int targetUserId)

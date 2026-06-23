@@ -265,8 +265,11 @@ public sealed partial class NetNode : IDisposable
         public readonly string AnimPayload;
         public readonly string Type;
         public readonly string StatePayload;
+        public readonly double Time;
+        public readonly double Dx;
+        public readonly double Dy;
 
-        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string animPayload, string type, string statePayload = "", int generation = 0)
+        public MobStateSnapshot(int index, double x, double y, int dir, int life, int maxLife, string animPayload, string type, string statePayload = "", int generation = 0, double time = 0.0, double dx = 0.0, double dy = 0.0)
         {
             Index = index;
             Generation = generation;
@@ -278,6 +281,9 @@ public sealed partial class NetNode : IDisposable
             AnimPayload = animPayload ?? string.Empty;
             Type = type ?? string.Empty;
             StatePayload = statePayload ?? string.Empty;
+            Time = time;
+            Dx = dx;
+            Dy = dy;
         }
     }
 
@@ -289,8 +295,11 @@ public sealed partial class NetNode : IDisposable
         public readonly double Y;
         public readonly int Dir;
         public readonly string AnimPayload;
+        public readonly double Time;
+        public readonly double Dx;
+        public readonly double Dy;
 
-        public MobMoveSnapshot(int index, double x, double y, int dir, string animPayload, int generation = 0)
+        public MobMoveSnapshot(int index, double x, double y, int dir, string animPayload, int generation = 0, double time = 0.0, double dx = 0.0, double dy = 0.0)
         {
             Index = index;
             Generation = generation;
@@ -298,6 +307,9 @@ public sealed partial class NetNode : IDisposable
             Y = y;
             Dir = dir;
             AnimPayload = animPayload ?? string.Empty;
+            Time = time;
+            Dx = dx;
+            Dy = dy;
         }
     }
 

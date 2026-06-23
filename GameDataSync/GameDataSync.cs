@@ -1059,7 +1059,7 @@ namespace DeadCellsMultiplayerMod
         {
             var merged = new Dictionary<string, int>(_origLoreRoomRunIdsSnapshot, StringComparer.Ordinal);
             var currentLore = new Dictionary<string, int>(StringComparer.Ordinal);
-            CopyStoryStringIntMapToDictionary(currentStory?.loreRoomRunIds, currentLore);
+            CopyStoryStringIntMapToDictionary(currentStory != null ? ((dynamic)currentStory).loreRoomRunIds : null, currentLore);
             foreach (var kv in currentLore)
             {
                 if (!_remoteLoreRoomRunIdsSnapshot.TryGetValue(kv.Key, out var remoteValue) || remoteValue != kv.Value)
@@ -1073,7 +1073,7 @@ namespace DeadCellsMultiplayerMod
         {
             var merged = new HashSet<string>(_origVisitedLoreRoomsSnapshot, StringComparer.Ordinal);
             var currentVisited = new HashSet<string>(StringComparer.Ordinal);
-            CopyStoryVisitedLoreRoomsToSet(currentStory?.visitedLoreRooms, currentVisited);
+            CopyStoryVisitedLoreRoomsToSet(currentStory != null ? ((dynamic)currentStory).visitedLoreRooms : null, currentVisited);
             foreach (var key in currentVisited)
             {
                 if (!_remoteVisitedLoreRoomsSnapshot.Contains(key))
@@ -1412,10 +1412,11 @@ namespace DeadCellsMultiplayerMod
             storyWasNull = story == null;
             if (story != null)
             {
+                dynamic dynStory = story;
                 CopyCountersToDictionary(story.counters, countersTarget);
                 CopyNpcProgressToDictionary(story.npcProgresses, npcProgressTarget);
-                CopyStoryStringIntMapToDictionary(story.loreRoomRunIds, loreRoomRunIdsTarget);
-                CopyStoryVisitedLoreRoomsToSet(story.visitedLoreRooms, visitedLoreRoomsTarget);
+                CopyStoryStringIntMapToDictionary(dynStory.loreRoomRunIds, loreRoomRunIdsTarget);
+                CopyStoryVisitedLoreRoomsToSet(dynStory.visitedLoreRooms, visitedLoreRoomsTarget);
                 CopyStoryPlannedLoresToList(story.plannedLores, plannedLoresTarget);
                 storyDataVersion = story.storyDataVersion;
                 return;
@@ -1480,31 +1481,33 @@ namespace DeadCellsMultiplayerMod
             if (story == null)
                 return false;
 
-            if (story.storyDataVersion != 0)
+            dynamic dynStory = story;
+
+            if (dynStory.storyDataVersion != 0)
                 return true;
 
             var counters = new Dictionary<string, int>(StringComparer.Ordinal);
-            CopyCountersToDictionary(story.counters, counters);
+            CopyCountersToDictionary(dynStory.counters, counters);
             if (counters.Count > 0)
                 return true;
 
             var npcProgress = new Dictionary<int, int>();
-            CopyNpcProgressToDictionary(story.npcProgresses, npcProgress);
+            CopyNpcProgressToDictionary(dynStory.npcProgresses, npcProgress);
             if (npcProgress.Count > 0)
                 return true;
 
             var loreRoomRunIds = new Dictionary<string, int>(StringComparer.Ordinal);
-            CopyStoryStringIntMapToDictionary(story.loreRoomRunIds, loreRoomRunIds);
+            CopyStoryStringIntMapToDictionary(dynStory.loreRoomRunIds, loreRoomRunIds);
             if (loreRoomRunIds.Count > 0)
                 return true;
 
             var visitedLoreRooms = new HashSet<string>(StringComparer.Ordinal);
-            CopyStoryVisitedLoreRoomsToSet(story.visitedLoreRooms, visitedLoreRooms);
+            CopyStoryVisitedLoreRoomsToSet(dynStory.visitedLoreRooms, visitedLoreRooms);
             if (visitedLoreRooms.Count > 0)
                 return true;
 
             var plannedLores = new List<int>();
-            CopyStoryPlannedLoresToList(story.plannedLores, plannedLores);
+            CopyStoryPlannedLoresToList(dynStory.plannedLores, plannedLores);
             return plannedLores.Count > 0;
         }
 
@@ -1558,7 +1561,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void CopyStoryStringIntMapToDictionary(virtual_exists_get_iterator_keys_remove_set_toString_? map, Dictionary<string, int> target)
+        private static void CopyStoryStringIntMapToDictionary(dynamic? map, Dictionary<string, int> target)
         {
             target.Clear();
             if (map == null)

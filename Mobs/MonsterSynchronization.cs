@@ -16,7 +16,6 @@ using dc.tool.skill;
 using DeadCellsMultiplayerMod.Ghost;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.Mobs.Bosses;
-using DeadCellsMultiplayerMod.Mobs.Levelinit;
 using DeadCellsMultiplayerMod.Tools;
 using Hashlink.Virtuals;
 using HaxeProxy.Runtime;
@@ -40,7 +39,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly object Sync = new();
         private static readonly List<Mob> trackedMobs = new();
         private static readonly Dictionary<Mob, int> trackedMobIndices = new(ReferenceEqualityComparer.Instance);
-        private static readonly Dictionary<int, Mob> trackedMobBySyncId = new();
+        private static readonly Dictionary<int, Mob> IdToMob = new();
+        private static readonly Dictionary<Mob, int> MobToId = new(ReferenceEqualityComparer.Instance);
+        private static int nextRuntimeSyncId;
 
         private static readonly Dictionary<Mob, ClientMobState> clientMobTargets = new(ReferenceEqualityComparer.Instance);
         private static readonly Dictionary<Mob, Entity?> clientCachedAttackTargetByMob = new(ReferenceEqualityComparer.Instance);
@@ -53,6 +54,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, string> hostLastAppliedClientAffectPayloadBySyncId = new();
         private static readonly Dictionary<Mob, string> clientLastAppliedAnimPayloadByMob = new(ReferenceEqualityComparer.Instance);
         private static readonly Dictionary<Mob, double> clientLastAnimationApplyFrameByMob = new(ReferenceEqualityComparer.Instance);
+        private static readonly Dictionary<Mob, double> clientNetworkAttackStartFrame = new(ReferenceEqualityComparer.Instance);
         private static readonly Dictionary<string, ParsedAnimPayload> parsedAnimPayloadCache = new(StringComparer.Ordinal);
         private static readonly Dictionary<int, string> hostMobTypeBySyncId = new();
         private static readonly Dictionary<int, HashSet<int>> hostClientInterestUsersBySyncId = new();
@@ -155,8 +157,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             public readonly int MaxLife;
             public readonly string AnimPayload;
             public readonly string StatePayload;
+            public readonly double Time;
+            public readonly double Dx;
+            public readonly double Dy;
 
-            public ClientMobState(double x, double y, int dir, int life, int maxLife, string animPayload, string statePayload)
+            public ClientMobState(double x, double y, int dir, int life, int maxLife, string animPayload, string statePayload, double time = 0.0, double dx = 0.0, double dy = 0.0)
             {
                 X = x;
                 Y = y;
@@ -165,6 +170,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 MaxLife = maxLife;
                 AnimPayload = animPayload ?? string.Empty;
                 StatePayload = statePayload ?? string.Empty;
+                Time = time;
+                Dx = dx;
+                Dy = dy;
             }
         }
 
@@ -291,7 +299,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 levelId = GetLevelTraceIdSafe(currentLevel);
                 ResetMobTrackingLocked("level_change_external");
             }
-            SyncMobIdRegistry.ClearForLevel(null);
             try { GameMenu.NetRef?.ClearMobSyncQueues(); } catch { }
             MobSyncTrace.LogLevelReset("external", levelId, trackedBeforeReset);
         }
@@ -728,12 +735,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 currentIdentityToken = s_levelIdentityToken;
                 identityReady = s_levelIdentityReady;
                 lastResetReason = s_lastResetReason;
-                if (IsHost(net))
-                {
-                    shouldSuppressEnteredLog = ShouldIgnoreCommittedIdentityEntitiesPostCreateLocked(
-                        self,
-                        ComputeLevelIdentityToken(self));
-                }
+                shouldSuppressEnteredLog = ShouldIgnoreCommittedIdentityEntitiesPostCreateLocked(
+                    self,
+                    ComputeLevelIdentityToken(self));
             }
 
             if (!shouldSuppressEnteredLog)
@@ -751,7 +755,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             orig(self);
-            if (IsHost(net) && TryIgnoreCommittedIdentityEntitiesPostCreate(self))
+            if (TryIgnoreCommittedIdentityEntitiesPostCreate(self))
                 return;
 
             var rebuildAccepted = RebuildMobArray(self);
@@ -840,7 +844,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 levelId = GetLevelTraceIdSafe(self);
                 ResetMobTrackingLocked("level_dispose_before_orig");
             }
-            SyncMobIdRegistry.ClearForLevel(self);
             try { GameMenu.NetRef?.ClearMobSyncQueues(); } catch { }
             MobSyncTrace.LogLevelReset("dispose", levelId, trackedBeforeReset);
 
@@ -911,6 +914,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     ObserveClientMobForDirtyQueue(self);
                     ApplyClientAnimationStateBeforeUpdate(self);
+                    TryRepairClientMobAttackTarget(self);
                 }
 
                 return;
@@ -918,7 +922,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             orig(self);
             if (IsSyncMob(self))
+            {
                 ObserveHostMobForDirtyQueue(self);
+                TryAssignHostAttackTarget(self);
+            }
         }
 
         private static void Hook_Mob_onDie(Hook_Mob.orig_onDie orig, Mob self)

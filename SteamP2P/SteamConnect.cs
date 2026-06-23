@@ -119,41 +119,6 @@ namespace DeadCellsMultiplayerMod
             public string PersonaName { get; set; } = string.Empty;
         }
 
-        internal static bool TryCreateHostLobby(int hostPort, out HostLobbyResult result)
-        {
-            StopHostLobbyWorker();
-
-            var request = new WorkerRequest
-            {
-                Mode = "host",
-                HostPort = NormalizePort(hostPort),
-                HostIp = ResolveBestHostIp(),
-                StopSignalPath = Path.Combine(Path.GetTempPath(), $"dccm_steam_stop_{Guid.NewGuid():N}.sig")
-            };
-
-            if (!TryRunHostWorker(request, out var response))
-            {
-                result = new HostLobbyResult
-                {
-                    Success = false,
-                    Error = response.Error ?? "Steam worker process failed"
-                };
-                return false;
-            }
-
-            result = new HostLobbyResult
-            {
-                Success = response.Success,
-                LobbyId = response.LobbyId,
-                HostIp = response.HostIp ?? string.Empty,
-                HostPort = response.HostPort,
-                PersonaName = response.PersonaName ?? string.Empty,
-                Error = response.Error ?? string.Empty
-            };
-
-            return result.Success;
-        }
-
         internal static bool TryResolveJoinEndpointFromClipboard(out JoinLobbyResult result)
         {
             result = new JoinLobbyResult
@@ -391,42 +356,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        /// <summary>
-        /// Sets Rich Presence "connect" so friends can use "Join Game" in Steam overlay.
-        /// </summary>
-        internal static void SetHostRichPresence(ulong lobbyId)
-        {
-            if (lobbyId == 0UL)
-            {
-                ClearRichPresence();
-                return;
-            }
-            try
-            {
-                var connect = $"+connect_lobby {lobbyId}";
-                if (SteamFriends.SetRichPresence("connect", connect))
-                    ModEntry.Instance?.Logger?.Debug("[NetMod][Steam] Rich Presence set: connect={Connect}", connect);
-            }
-            catch (Exception ex)
-            {
-                ModEntry.Instance?.Logger?.Debug(ex, "[NetMod][Steam] SetRichPresence failed");
-            }
-        }
-
-        /// <summary>
-        /// Clears Rich Presence when leaving lobby.
-        /// </summary>
-        internal static void ClearRichPresence()
-        {
-            try
-            {
-                SteamFriends.ClearRichPresence();
-            }
-            catch
-            {
-            }
-        }
-
         internal static bool TryCopyLobbyIdToClipboard(ulong lobbyId)
         {
             if (lobbyId == 0)
@@ -462,15 +391,6 @@ namespace DeadCellsMultiplayerMod
             } while (value > 0 && index > 0);
 
             return string.Concat(LobbyCodePrefix, new string(buffer[index..]));
-        }
-
-        internal static bool TryReadLobbyIdFromClipboard(out ulong lobbyId)
-        {
-            lobbyId = 0;
-            var text = TryGetClipboardText();
-            if (!TryParseLobbyInput(text, out lobbyId, out _))
-                return false;
-            return lobbyId > 0;
         }
 
         private static bool TryParseLobbyInput(string? text, out ulong lobbyId, out string lobbyCode)
@@ -514,54 +434,6 @@ namespace DeadCellsMultiplayerMod
             if (!normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal))
                 return string.Concat(LobbyCodePrefix, normalized);
             return normalized;
-        }
-
-        private static bool TryDecodeLobbyCode(string rawCode, out ulong lobbyId)
-        {
-            lobbyId = 0;
-            if (string.IsNullOrWhiteSpace(rawCode))
-                return false;
-
-            var normalized = rawCode.Trim().ToLowerInvariant();
-            if (normalized.StartsWith(LobbyCodePrefix, StringComparison.OrdinalIgnoreCase))
-                normalized = normalized.Substring(LobbyCodePrefix.Length);
-
-            if (normalized.Length == 0)
-                return false;
-
-            ulong value = 0;
-            try
-            {
-                for (int i = 0; i < normalized.Length; i++)
-                {
-                    var ch = normalized[i];
-                    int digit;
-                    if (ch >= '0' && ch <= '9')
-                        digit = ch - '0';
-                    else if (ch >= 'a' && ch <= 'z')
-                        digit = 10 + (ch - 'a');
-                    else
-                        return false;
-
-                    if (digit >= 36)
-                        return false;
-
-                    checked
-                    {
-                        value = value * 36UL + (ulong)digit;
-                    }
-                }
-            }
-            catch
-            {
-                return false;
-            }
-
-            if (value == 0)
-                return false;
-
-            lobbyId = value;
-            return true;
         }
 
         private static bool TryRunHostWorker(WorkerRequest request, out WorkerResponse response)

@@ -224,7 +224,7 @@ public sealed partial class NetNode
         foreach (var entry in entries)
         {
             var parts = entry.Split(',');
-            if (parts.Length < 7)
+            if (parts.Length < 10)
                 continue;
 
             if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
@@ -239,20 +239,17 @@ public sealed partial class NetNode
                 continue;
             if (!int.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxLife))
                 continue;
-            var generation = 0;
-            var valueOffset = 6;
-            if (parts.Length > 7 &&
-                int.TryParse(parts[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedGeneration))
-            {
-                generation = parsedGeneration;
-                valueOffset = 7;
-            }
+            if (!int.TryParse(parts[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out var generation))
+                continue;
 
-            var animPayload = parts.Length > valueOffset ? parts[valueOffset] : string.Empty;
-            var type = parts.Length > valueOffset + 1 ? parts[valueOffset + 1] : string.Empty;
-            var statePayload = parts.Length > valueOffset + 2 ? parts[valueOffset + 2] : string.Empty;
+            var animPayload = parts[7];
+            var type = parts.Length > 8 ? parts[8] : string.Empty;
+            var statePayload = parts.Length > 9 ? parts[9] : string.Empty;
+            var time = parts.Length > 10 && double.TryParse(parts[10], NumberStyles.Float, CultureInfo.InvariantCulture, out var pt) ? pt : 0.0;
+            var dx = parts.Length > 11 && double.TryParse(parts[11], NumberStyles.Float, CultureInfo.InvariantCulture, out var pdx) ? pdx : 0.0;
+            var dy = parts.Length > 12 && double.TryParse(parts[12], NumberStyles.Float, CultureInfo.InvariantCulture, out var pdy) ? pdy : 0.0;
 
-            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload, generation));
+            states.Add(new MobStateSnapshot(index, x, y, dir, life, maxLife, animPayload, type, statePayload, generation, time, dx, dy));
         }
 
         return states;
@@ -268,7 +265,7 @@ public sealed partial class NetNode
         foreach (var entry in entries)
         {
             var parts = entry.Split(',');
-            if (parts.Length < 5)
+            if (parts.Length < 6)
                 continue;
 
             if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
@@ -279,18 +276,15 @@ public sealed partial class NetNode
                 continue;
             if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dir))
                 continue;
-            var generation = 0;
-            var animIndex = 4;
-            if (parts.Length > 5 &&
-                int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedGeneration))
-            {
-                generation = parsedGeneration;
-                animIndex = 5;
-            }
+            if (!int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var generation))
+                continue;
 
-            var animPayload = parts.Length > animIndex ? parts[animIndex] : string.Empty;
+            var animPayload = parts[5];
+            var time = parts.Length > 6 && double.TryParse(parts[6], NumberStyles.Float, CultureInfo.InvariantCulture, out var pt) ? pt : 0.0;
+            var dx = parts.Length > 7 && double.TryParse(parts[7], NumberStyles.Float, CultureInfo.InvariantCulture, out var pdx) ? pdx : 0.0;
+            var dy = parts.Length > 8 && double.TryParse(parts[8], NumberStyles.Float, CultureInfo.InvariantCulture, out var pdy) ? pdy : 0.0;
 
-            moves.Add(new MobMoveSnapshot(index, x, y, dir, animPayload, generation));
+            moves.Add(new MobMoveSnapshot(index, x, y, dir, animPayload, generation, time, dx, dy));
         }
 
         return moves;

@@ -51,6 +51,12 @@ internal static class MobWireCodec
                 AppendInvariant(sb, m.Generation);
                 sb.Append(',');
                 sb.Append(m.AnimPayload ?? string.Empty);
+                sb.Append(',');
+                AppendInvariant(sb, m.Time);
+                sb.Append(',');
+                AppendInvariant(sb, m.Dx);
+                sb.Append(',');
+                AppendInvariant(sb, m.Dy);
             }
         }
         sb.Append('\n');
@@ -219,6 +225,12 @@ internal static class MobWireCodec
             sb.Append(s.Type ?? string.Empty);
             sb.Append(',');
             sb.Append(s.StatePayload ?? string.Empty);
+            sb.Append(',');
+            AppendInvariant(sb, s.Time);
+            sb.Append(',');
+            AppendInvariant(sb, s.Dx);
+            sb.Append(',');
+            AppendInvariant(sb, s.Dy);
         }
     }
 
@@ -249,13 +261,13 @@ internal static class MobWireCodec
     }
 }
 
-/// <summary>Optional compact binary wire for MOBSTATE batches (enable DCCM_MOB_WIRE_BINARY=1).</summary>
+/// <summary>Compact binary wire for MOBSTATE batches (opt-out via DCCM_MOB_WIRE_TEXT=1).</summary>
 internal static class MobWireBinary
 {
-    public const byte WireVersion = 2;
+    public const byte WireVersion = 3;
 
     public static bool UseBinaryWire =>
-        string.Equals(Environment.GetEnvironmentVariable("DCCM_MOB_WIRE_BINARY"), "1", StringComparison.Ordinal);
+        !string.Equals(Environment.GetEnvironmentVariable("DCCM_MOB_WIRE_TEXT"), "1", StringComparison.Ordinal);
 
     public static bool TryBuildMobStatesBinary(IReadOnlyList<NetNode.MobStateSnapshot> states, out byte[]? bytes)
     {
@@ -269,7 +281,7 @@ internal static class MobWireBinary
             if (n > ushort.MaxValue)
                 n = ushort.MaxValue;
 
-            using var ms = new MemoryStream(64 + n * 96);
+            using var ms = new MemoryStream(64 + n * 120);
             using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
             bw.Write(WireVersion);
             bw.Write((ushort)n);
@@ -283,6 +295,9 @@ internal static class MobWireBinary
                 bw.Write(s.Dir);
                 bw.Write(s.Life);
                 bw.Write(s.MaxLife);
+                bw.Write(s.Time);
+                bw.Write(s.Dx);
+                bw.Write(s.Dy);
                 WriteUtf8(bw, s.AnimPayload ?? string.Empty);
                 WriteUtf8(bw, s.Type ?? string.Empty);
                 WriteUtf8(bw, s.StatePayload ?? string.Empty);
@@ -333,14 +348,14 @@ internal static class MobWireBinary
             return false;
 
         var ver = raw[0];
-        if (ver != 1 && ver != WireVersion)
+        if (ver != 1 && ver != 2 && ver != WireVersion)
             return false;
 
         var count = BinaryPrimitives.ReadUInt16LittleEndian(raw.Slice(1, 2));
         var offset = 3;
         for (int i = 0; i < count; i++)
         {
-            var fixedBytes = ver >= 2 ? 36 : 32;
+            var fixedBytes = ver >= 3 ? 60 : ver >= 2 ? 36 : 32;
             if (offset + fixedBytes > raw.Length)
                 return false;
 
@@ -363,12 +378,23 @@ internal static class MobWireBinary
             var maxLife = BinaryPrimitives.ReadInt32LittleEndian(raw.Slice(offset, 4));
             offset += 4;
 
+            double time = 0.0, dx = 0.0, dy = 0.0;
+            if (ver >= 3)
+            {
+                time = BitConverter.ToDouble(raw.Slice(offset, 8));
+                offset += 8;
+                dx = BitConverter.ToDouble(raw.Slice(offset, 8));
+                offset += 8;
+                dy = BitConverter.ToDouble(raw.Slice(offset, 8));
+                offset += 8;
+            }
+
             if (!TryReadUtf8Segment(raw, ref offset, out var anim) ||
                 !TryReadUtf8Segment(raw, ref offset, out var type) ||
                 !TryReadUtf8Segment(raw, ref offset, out var state))
                 return false;
 
-            destination.Add(new NetNode.MobStateSnapshot(index, x, y, dir, life, maxLife, anim, type, state, generation));
+            destination.Add(new NetNode.MobStateSnapshot(index, x, y, dir, life, maxLife, anim, type, state, generation, time, dx, dy));
         }
 
         return destination.Count > 0;

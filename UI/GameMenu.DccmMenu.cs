@@ -247,7 +247,7 @@ namespace DeadCellsMultiplayerMod
                 AddDccmInfo(options, flow, "Lobby code", lobbyCode);
 
             AddDccmInfo(options, flow, "Remote player", string.IsNullOrWhiteSpace(_remoteUsername) ? Localize("Waiting") : _remoteUsername);
-            AddDccmInfo(options, flow, "Ready", AllPlayersReady() ? Localize("Ready") : Localize("Waiting"));
+            AddDccmInfo(options, flow, "Ready", string.IsNullOrWhiteSpace(_remoteUsername) ? Localize("Waiting") : Localize("Ready"));
 
             AddDccmButton(options, flow, "Play", "Launch game", () => DccmStartHostRun(options));
             AddDccmButton(options, flow, GetMultiplayerSaveButtonLabel(), "Choose multiplayer save slot", () => DccmOpenMultiplayerSlotMenu(options), localizeLabel: false);
@@ -357,60 +357,15 @@ namespace DeadCellsMultiplayerMod
 
         private static void DccmStartSteamHost()
         {
-            _menuSelection = NetRole.Host;
-            _menuTransport = ConnectionTransport.Steam;
-            _steamLobbyActive = false;
-            _steamLobbyId = 0;
-            _steamLobbyCode = string.Empty;
-            _steamHostSteamId = 0UL;
-            ConnectionUI.NotifyConnectionsChanged();
-            ApplySteamPersonaUsername();
-
-            StartHostServerOnly(bindAnyAddress: true);
-            if (NetRef == null || !NetRef.IsAlive || !NetRef.IsHost)
-            {
-                _log?.Warning("[NetMod][Steam] Host start failed: host server was not created");
-                ShowDccmError("Steam host failed", "Could not start Steam host. Check console logs.", () => OpenDccmMenu(DccmHostTransportMenu));
-                return;
-            }
-
-            var lobby = NetRef.HostLobbyResult;
-            if (lobby == null || !lobby.Success)
-            {
-                StopNetworkFromMenu();
-                _log?.Warning("[NetMod][SteamWorkerError] {Error}", lobby?.Error ?? "Lobby creation failed");
-                ShowDccmError("Steam host failed", "Steam lobby creation failed. Check console logs.", () => OpenDccmMenu(DccmHostTransportMenu));
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(lobby.PersonaName))
-                ApplySteamPersonaUsername(lobby.PersonaName);
-
-            _steamLobbyActive = true;
-            _steamLobbyId = lobby.LobbyId;
-            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
-            ConnectionUI.NotifyConnectionsChanged();
-            _log?.Information("[NetMod][Steam] Host lobby ready: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
-
-            var copied = SteamConnect.TryCopyLobbyCodeToClipboard(_steamLobbyCode)
-                         || SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
-            if (copied)
-                MultiplayerUI.PushSystemMessage("Lobby id copied to clipboard");
-
-            OpenDccmMenu(DccmHostStatusMenu);
-            GetTitleScreen()?.ShouldAutoHideConnectionUI(true);
+            SharedStartSteamHost(
+                showError: (title, details, onBack) => ShowDccmError(title, details, onBack),
+                showStatus: () => { OpenDccmMenu(DccmHostStatusMenu); GetTitleScreen()?.ShouldAutoHideConnectionUI(true); },
+                showTransport: () => OpenDccmMenu(DccmHostTransportMenu)
+            );
         }
 
         private static void DccmStartSteamJoin()
         {
-            _menuSelection = NetRole.Client;
-            _menuTransport = ConnectionTransport.Steam;
-            _steamLobbyActive = false;
-            _steamLobbyId = 0;
-            _steamLobbyCode = string.Empty;
-            _steamHostSteamId = 0UL;
-            ApplySteamPersonaUsername();
-
             _steamJoinLobbyResolvePending = true;
             _waitingForHost = true;
             _clientConnecting = true;
@@ -426,51 +381,11 @@ namespace DeadCellsMultiplayerMod
 
         private static void DccmApplySteamJoinResult(bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay)
         {
-            _steamJoinLobbyResolvePending = false;
-
-            if (fromOverlay)
-                _log?.Information("[NetMod][Steam] Overlay join result: ok={Ok} error={Error}", ok, join.Error ?? "(none)");
-
-            if (!ok)
-            {
-                StopNetworkFromMenu();
-                _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
-                ShowDccmError("Steam join failed", "Steam join failed. Check console logs.", () => OpenDccmMenu(DccmJoinTransportMenu));
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(join.PersonaName))
-                ApplySteamPersonaUsername(join.PersonaName);
-
-            if (join.HostSteamId == 0UL && join.Endpoint == null)
-            {
-                ShowDccmError("Steam join failed", "Steam lobby endpoint is invalid. Check console logs.", () => OpenDccmMenu(DccmJoinTransportMenu));
-                return;
-            }
-
-            if (join.Endpoint != null)
-            {
-                _mpIp = join.Endpoint.Address.ToString();
-                _mpPort = join.Endpoint.Port;
-                SaveConfig();
-            }
-
-            _steamLobbyId = join.LobbyId;
-            _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
-            _steamHostSteamId = join.HostSteamId;
-            ConnectionUI.NotifyConnectionsChanged();
-            _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
-
-            var screen = GetTitleScreen();
-            if (screen == null)
-            {
-                ShowDccmError("Steam join failed", "Main menu is not available.", () => OpenDccmMenu(DccmJoinTransportMenu));
-                return;
-            }
-
-            StartNetwork(NetRole.Client, screen);
-            OpenDccmMenu(DccmClientWaitingMenu);
-            screen.ShouldAutoHideConnectionUI(true);
+            SharedApplySteamJoinResult(ok, join, fromOverlay,
+                showError: (title, details, onBack) => ShowDccmError(title, details, onBack),
+                showStatus: () => { OpenDccmMenu(DccmClientWaitingMenu); GetTitleScreen()?.ShouldAutoHideConnectionUI(true); },
+                showTransport: () => OpenDccmMenu(DccmJoinTransportMenu)
+            );
         }
 
         private static void ShowDccmError(string title, string details, Action onBack)

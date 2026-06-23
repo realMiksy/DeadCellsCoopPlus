@@ -137,21 +137,12 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI
                     fastCheck.remove(key);
                 }
 
-                //ModEntry.me.deathRespawn();
-
                 if (me != null)
                 {
                     InventItem inventItem = new InventItem(new InventItemKind.Perk("P_Yolo".AsHaxeString()));
                     me.applyItemPickEffect(me, inventItem);
                     inventItem.clone(true, "P_Yolo".AsHaxeString());
 
-                    // int length = items.array.Count;
-                    // for (int i = 0; i < length; i++)
-                    // {
-                    //     inventItem = (InventItem?)items.array[i]!;
-                    // }
-                    // virtual_ambiantDesc_castCD_cellCost_commonProps_dlc_droppable_gameplayDesc_group_icon_id_legendAffixes_moneyCost_name_props_synergy_tags_tier1_tier2_ itemData = (virtual_ambiantDesc_castCD_cellCost_commonProps_dlc_droppable_gameplayDesc_group_icon_id_legendAffixes_moneyCost_name_props_synergy_tags_tier1_tier2_)item.byId.get(string3);
-                    // inventItem._itemData = itemData;
                     me.tryToApplyYoloPerk();
                     me.removeTemporaryItems();
                 }

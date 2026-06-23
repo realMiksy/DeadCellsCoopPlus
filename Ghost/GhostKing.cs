@@ -61,7 +61,6 @@ namespace DeadCellsMultiplayerMod.Ghost.GhostBase
         {
         }
 
-
         public override void init()
         {
             EnsureRuntimeDependencies();

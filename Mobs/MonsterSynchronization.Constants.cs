@@ -15,6 +15,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double ClientAiAuthorityLockDurationSeconds = 99999.0;
         private const double AuthoritativeAffectPresenceSeconds = 99999.0;
         private const double PixelsPerCase = 24.0;
+        private const double ClientNetworkAttackMinActiveFrames = 20.0;
         private const string ContactAttackPacketSkillId = "@contact";
         private const string OldSkillPreparePacketPrefix = "@oldprep:";
         private const string OldSkillChargeCompletePacketPrefix = "@oldcc:";

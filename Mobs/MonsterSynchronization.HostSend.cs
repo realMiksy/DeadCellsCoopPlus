@@ -189,6 +189,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             var hasObserved = false;
             HostMobSentState previous;
             var hadPrevious = false;
+            var ft = GetCurrentFrame(mob);
+            double dx = 0.0, dy = 0.0;
+            try { dx = mob.dx + mob.bdx; dy = mob.dy + mob.bdy; } catch { }
 
             lock (Sync)
             {
@@ -242,7 +245,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     y,
                     dir,
                     animChanged ? animPayload : string.Empty,
-                    identityToken);
+                    identityToken,
+                    ft,
+                    dx,
+                    dy);
                 return true;
             }
 
@@ -272,7 +278,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 snapshotAnimPayload,
                 snapshotMobType,
                 snapshotStatePayload,
-                identityToken);
+                identityToken,
+                ft,
+                dx,
+                dy);
             return true;
         }
 

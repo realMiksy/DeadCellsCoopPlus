@@ -9,7 +9,6 @@ using dc.pr;
 using dc.ui;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
-using DeadCellsMultiplayerMod.Tools;
 using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
@@ -255,8 +254,6 @@ public class LevelExitSync :
 
     void IOnHeroUpdate.OnHeroUpdate(double dt)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
-        long stepStart;
         var hero = ModEntry.me;
         var net = GameMenu.NetRef;
         if (hero == null || net == null || !net.IsAlive || net.id <= 0)
@@ -269,60 +266,24 @@ public class LevelExitSync :
 
         var currentLevel = hero._level;
         if (!ReferenceEquals(_lastLevel, currentLevel))
-        {
-            stepStart = RuntimeHitchWatch.Start();
             ResetLevelState(currentLevel);
-            LogLevelExitStepIfSlow(
-                "LevelExitSync.ResetLevelState",
-                stepStart,
-                string.Create(CultureInfo.InvariantCulture, $"visuals={_doorVisuals.Count} players={_playerStates.Count}"));
-        }
 
-        stepStart = RuntimeHitchWatch.Start();
-        var remoteStatesChanged = ConsumeIncomingExitReadyStates(net);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.ConsumeIncomingExitReadyStates",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"players={_playerStates.Count}"));
-        if (remoteStatesChanged)
+        if (ConsumeIncomingExitReadyStates(net))
             MarkExitUiStateDirty();
 
-        stepStart = RuntimeHitchWatch.Start();
-        var activePlayersChanged = RefreshActivePlayers(net);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.RefreshActivePlayers",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"activePlayers={_activePlayerIds.Count}"));
-        if (activePlayersChanged)
+        if (RefreshActivePlayers(net))
             MarkExitUiStateDirty();
 
-        stepStart = RuntimeHitchWatch.Start();
-        var playerStatesPruned = PrunePlayerStates(net.id);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.PrunePlayerStates",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"players={_playerStates.Count}"));
-        if (playerStatesPruned)
+        if (PrunePlayerStates(net.id))
             MarkExitUiStateDirty();
 
-        stepStart = RuntimeHitchWatch.Start();
         PruneDoorVisuals(currentLevel);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.PruneDoorVisuals",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"visuals={_doorVisuals.Count}"));
 
         if (RefreshDownedSignature(net.id))
             MarkExitUiStateDirty();
 
-        stepStart = RuntimeHitchWatch.Start();
         var nearestTarget = FindNearestExitTarget(hero, currentLevel, out var insideCircle);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.FindNearestExitTarget",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"candidates={_exitTargetCandidates.Count} visuals={_doorVisuals.Count}"));
-        var localSelectionChanged = ApplyNearestExitSelection(nearestTarget, insideCircle);
-        if (localSelectionChanged)
+        if (ApplyNearestExitSelection(nearestTarget, insideCircle))
             MarkExitUiStateDirty();
         if (nearestTarget != null)
             EnsureDoorVisual(nearestTarget);
@@ -334,26 +295,9 @@ public class LevelExitSync :
             MarkExitUiStateDirty();
         }
 
-        stepStart = RuntimeHitchWatch.Start();
         UpdateLocalPlayerState(net, forceSend: false);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.UpdateLocalPlayerState",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"door={_localDoorKey} pressed={(_localPressed ? 1 : 0)} inside={(_localInsideCircle ? 1 : 0)}"));
-
-        stepStart = RuntimeHitchWatch.Start();
         ApplyLocalTimerPause(_localPressed && _localInsideCircle);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.ApplyLocalTimerPause",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"paused={((_localPressed && _localInsideCircle) ? 1 : 0)}"));
-
-        stepStart = RuntimeHitchWatch.Start();
         RefreshDoorVisuals(net);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.RefreshDoorVisuals",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"visuals={_doorVisuals.Count}"));
 
         if (_localPressed &&
             _localInsideCircle &&
@@ -377,24 +321,7 @@ public class LevelExitSync :
             }
         }
 
-        stepStart = RuntimeHitchWatch.Start();
         UpdateExitPointer(net);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.UpdateExitPointer",
-            stepStart,
-            string.Create(CultureInfo.InvariantCulture, $"pointer={(_exitPointer != null ? 1 : 0)} visuals={_doorVisuals.Count}"));
-
-        var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-        if (hitchMs >= RuntimeHitchWatch.LevelExitSlowThresholdMs)
-        {
-            RuntimeHitchWatch.LogSlow(
-                _log,
-                "LevelExitSync.OnHeroUpdate",
-                hitchMs,
-                string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"players={_playerStates.Count} visuals={_doorVisuals.Count} exits={_exitTargetCandidates.Count} localPressed={(_localPressed ? 1 : 0)}"));
-        }
     }
 
     private void TriggerExitTransition(Entity target, Hero hero, Action? origActivate)
@@ -799,7 +726,6 @@ public class LevelExitSync :
 
     private Entity? FindExitTargetByCoordinates(Level? level, int cx, int cy)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
         if (level == null)
             return null;
 
@@ -808,13 +734,7 @@ public class LevelExitSync :
         if (_exitTargetsByDoorKey.TryGetValue(key, out var direct))
         {
             if (IsTrackedExitTargetCandidate(level, direct))
-            {
-                LogLevelExitStepIfSlow(
-                    "LevelExitSync.FindExitTargetByCoordinates",
-                    hitchStart,
-                    string.Create(CultureInfo.InvariantCulture, $"cx={cx} cy={cy} candidates={_exitTargetCandidates.Count} removed=0 found=1"));
                 return direct;
-            }
 
             _exitTargetsByDoorKey.Remove(key);
         }
@@ -836,10 +756,6 @@ public class LevelExitSync :
                 _exitTargetsByDoorKey[key] = entity;
                 if (removedCandidates > 0)
                     HandleRemovedExitTargetCandidates();
-                LogLevelExitStepIfSlow(
-                    "LevelExitSync.FindExitTargetByCoordinates",
-                    hitchStart,
-                    string.Create(CultureInfo.InvariantCulture, $"cx={cx} cy={cy} candidates={_exitTargetCandidates.Count} removed={removedCandidates} found=1"));
                 return entity;
             }
         }
@@ -847,10 +763,6 @@ public class LevelExitSync :
         if (removedCandidates > 0)
             HandleRemovedExitTargetCandidates();
 
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.FindExitTargetByCoordinates",
-            hitchStart,
-            string.Create(CultureInfo.InvariantCulture, $"cx={cx} cy={cy} candidates={_exitTargetCandidates.Count} removed={removedCandidates} found=0"));
         return null;
     }
 
@@ -1025,7 +937,6 @@ public class LevelExitSync :
 
     private void EnsureExitTargetCandidates(Level? level)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
         if (level == null || level.entities == null)
         {
             _exitTargetCandidates.Clear();
@@ -1054,11 +965,6 @@ public class LevelExitSync :
         _exitTargetCandidatesVersion++;
         InvalidateNearestExitCache();
         _exitPointerDirty = true;
-
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.CandidateRebuild",
-            hitchStart,
-            string.Create(CultureInfo.InvariantCulture, $"candidates={_exitTargetCandidates.Count}"));
     }
 
     private void TryTrackExitTargetCandidate(Level? level, Entity? entity)
@@ -1113,7 +1019,6 @@ public class LevelExitSync :
 
     private Entity? FindNearestExitTarget(Hero hero, Level? level, out bool insideCircle)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
         insideCircle = false;
         if (hero == null || level == null)
             return null;
@@ -1128,7 +1033,6 @@ public class LevelExitSync :
         Entity? best = null;
         var bestDistSq = double.MaxValue;
         var removedCandidates = 0;
-        var availableCandidates = 0;
         for (int i = _exitTargetCandidates.Count - 1; i >= 0; i--)
         {
             var target = _exitTargetCandidates[i];
@@ -1142,8 +1046,6 @@ public class LevelExitSync :
 
             if (!IsAvailableExitTarget(target))
                 continue;
-
-            availableCandidates++;
 
             var dx = GetEntityX(target!) - heroX;
             var dy = GetEntityY(target!) - heroY;
@@ -1160,10 +1062,6 @@ public class LevelExitSync :
             if (removedCandidates > 0)
                 HandleRemovedExitTargetCandidates();
             CacheNearestExitTarget(level, hero, null, false);
-            LogLevelExitStepIfSlow(
-                "LevelExitSync.FindNearestExitTarget.Scan",
-                hitchStart,
-                string.Create(CultureInfo.InvariantCulture, $"candidates={_exitTargetCandidates.Count} removed={removedCandidates} available={availableCandidates} found=0"));
             return null;
         }
 
@@ -1171,10 +1069,6 @@ public class LevelExitSync :
             HandleRemovedExitTargetCandidates();
         insideCircle = bestDistSq <= ExitCircleRadiusPx * ExitCircleRadiusPx;
         CacheNearestExitTarget(level, hero, best, insideCircle);
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.FindNearestExitTarget.Scan",
-            hitchStart,
-            string.Create(CultureInfo.InvariantCulture, $"candidates={_exitTargetCandidates.Count} removed={removedCandidates} available={availableCandidates} found=1 inside={(insideCircle ? 1 : 0)}"));
         return best;
     }
 
@@ -1191,7 +1085,6 @@ public class LevelExitSync :
 
     private void UpdateExitPointer(NetNode net)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
         if (_exitPointer != null && SafeRead(() => _exitPointer.destroyed, true))
         {
             _exitPointer = null;
@@ -1257,11 +1150,6 @@ public class LevelExitSync :
         {
             _exitPointerDirty = false;
         }
-
-        LogLevelExitStepIfSlow(
-            "LevelExitSync.UpdateExitPointer.Internal",
-            hitchStart,
-            string.Create(CultureInfo.InvariantCulture, $"watchedDoor={watchedDoor} pointer={(_exitPointer != null ? 1 : 0)}"));
     }
 
     private string ResolveWatchedDoorKey(NetNode? net)
@@ -1679,12 +1567,4 @@ public class LevelExitSync :
         _exitPointerDirty = true;
     }
 
-    private void LogLevelExitStepIfSlow(string key, long stepStart, string? details)
-    {
-        var stepMs = RuntimeHitchWatch.GetElapsedMilliseconds(stepStart);
-        if (stepMs < RuntimeHitchWatch.LevelExitStepSlowThresholdMs)
-            return;
-
-        RuntimeHitchWatch.LogSlow(_log, key, stepMs, details);
-    }
 }

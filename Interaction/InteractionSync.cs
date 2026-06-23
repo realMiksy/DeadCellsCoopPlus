@@ -5,7 +5,6 @@ using dc.hl.types;
 using dc.pr;
 using dc.tool.atk;
 using DeadCellsMultiplayerMod.Interface.ModuleInitializing;
-using DeadCellsMultiplayerMod.Tools;
 using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
@@ -427,7 +426,6 @@ public class InteractionSync :
 
     void IOnHeroUpdate.OnHeroUpdate(double dt)
     {
-        var hitchStart = RuntimeHitchWatch.Start();
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive)
             return;
@@ -477,18 +475,6 @@ public class InteractionSync :
         if (net.TryConsumeBossRuneUpdateCells(out var updateCellsEvents))
         {
             ApplyRemoteBossRuneUpdateCells(updateCellsEvents);
-        }
-
-        var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-        if (hitchMs >= RuntimeHitchWatch.InteractionSlowThresholdMs)
-        {
-            RuntimeHitchWatch.LogSlow(
-                _log,
-                "InteractionSync.OnHeroUpdate",
-                hitchMs,
-                string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"openedDoors={_openedDoors.Count} elevatorSends={_elevatorLastInterSendTickMs.Count}"));
         }
     }
 

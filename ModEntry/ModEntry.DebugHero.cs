@@ -59,7 +59,6 @@ namespace DeadCellsMultiplayerMod
             {
                 _debugPerkAppliedHero = null;
                 _debugPerkAppliedId = string.Empty;
-                _lastDebugPerkApplyErrorId = string.Empty;
                 _nextDebugPerkApplyTick = 0;
                 return;
             }
@@ -83,7 +82,6 @@ namespace DeadCellsMultiplayerMod
 
             _debugPerkAppliedHero = hero;
             _debugPerkAppliedId = perkId;
-            _lastDebugPerkApplyErrorId = string.Empty;
             _nextDebugPerkApplyTick = 0;
         }
 

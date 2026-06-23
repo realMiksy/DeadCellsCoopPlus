@@ -135,8 +135,6 @@ namespace DeadCellsMultiplayerMod
                 var disconnectedName = string.IsNullOrWhiteSpace(_remoteUsername) ? Localize("Guest") : _remoteUsername.Trim();
                 MultiplayerUI.PushSystemMessage(FormatLocalized("{0} disconnected from the server.", disconnectedName));
                 _remoteUsername = "guest";
-                _localReady = false;
-                _genArrived = false;
                 _seedArrived = false;
                 if (_menuSelection == NetRole.Host)
                 {
@@ -155,8 +153,6 @@ namespace DeadCellsMultiplayerMod
             ResetSteamState();
             ClearNetworkCaches();
             _remoteUsername = "guest";
-            _localReady = false;
-            _genArrived = false;
             MultiplayerUI.PushSystemMessage(Localize("Host disconnected from server."));
             if (wasInRun)
                 StartHostDisconnectCountdown();
@@ -196,17 +192,9 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static bool AllPlayersReady()
-        {
-            if (!_localReady) return false;
-            if (_playersDisplay.Count == 0) return true;
-            return _playersDisplay.All(p => p.Ready);
-        }
-
         private static void ClearNetworkCaches()
         {
             CacheLevelDescSync(null);
-            _genArrived = false;
             _seedArrived = false;
         }
 
@@ -307,10 +295,7 @@ namespace DeadCellsMultiplayerMod
                 lock (Sync)
                 {
                     if (_role == NetRole.Client && !_inActualRun)
-                    {
-                        _genArrived = true;
                         _pendingAutoStart = true;
-                    }
                 }
             }
             catch (Exception ex)
@@ -351,14 +336,6 @@ namespace DeadCellsMultiplayerMod
             public string last_ip { get; set; } = "127.0.0.1";
             public int last_port { get; set; } = 1234;
             public string player_id { get; set; } = Guid.NewGuid().ToString("N");
-        }
-
-        private sealed class PlayerInfo
-        {
-            public string Id { get; set; } = Guid.NewGuid().ToString("N");
-            public string Name { get; set; } = "guest";
-            public bool Ready { get; set; }
-            public bool IsHost { get; set; }
         }
 
         private static void LoadConfig()

@@ -84,6 +84,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private static readonly Dictionary<int, HostMobDirtyFlags> hostDirtyFlagsBySyncId = new();
         private static readonly Queue<int> hostDirtyMobQueue = new();
         private static readonly HashSet<int> hostDirtyQueuedSyncIds = new();
+        private static readonly Dictionary<int, double> hostLastSendFrameBySyncId = new();
         private static readonly Dictionary<int, ClientDrawObservedState> clientObservedDrawStateBySyncId = new();
         private static readonly Dictionary<int, ClientMobDirtyFlags> clientDirtyFlagsBySyncId = new();
         private static readonly Queue<int> clientDirtyMobQueue = new();
@@ -324,6 +325,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private static int s_pendingHostBatchCount;
+
         private static void FlushHostDirtyMobQueue(NetNode net)
         {
             if (!IsHost(net))
@@ -345,43 +348,122 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var entryBytes = EstimateMobStateWireBytes(stateSnapshot, s_batchSnapshotsScratch.Count);
                     if (s_batchSnapshotsScratch.Count > 0 && stateBytes + entryBytes > MobWirePacketByteBudget)
                     {
-                        MobSyncTrace.LogSendStatesBatch("host", s_batchSnapshotsScratch);
-                        net.SendMobStates(s_batchSnapshotsScratch);
+                        TrySendHostStatesBatchAsync(net, s_batchSnapshotsScratch);
                         s_batchSnapshotsScratch.Clear();
                         stateBytes = GetWireLineBaseBytes("MOBSTATE|");
                     }
 
+                    RecordHostMobSendFrame(syncId);
                     s_batchSnapshotsScratch.Add(stateSnapshot);
                     stateBytes += entryBytes;
+                    continue;
+                }
+
+                // Move-only update: apply per-tier rate limiting (skip if animation changed)
+                if (string.IsNullOrEmpty(moveSnapshot.AnimPayload) && !IsHostMobMoveDue(mob, syncId))
+                {
+                    lock (Sync)
+                    {
+                        EnqueueHostMobDirtyLocked(syncId, flags);
+                    }
                     continue;
                 }
 
                 var moveEntryBytes = EstimateMobMoveWireBytes(moveSnapshot, s_moveSnapshotsScratch.Count);
                 if (s_moveSnapshotsScratch.Count > 0 && moveBytes + moveEntryBytes > MobWirePacketByteBudget)
                 {
-                    MobSyncTrace.LogSendMovesBatch("host", s_moveSnapshotsScratch);
-                    net.SendMobMoves(s_moveSnapshotsScratch);
+                    TrySendHostMovesBatchAsync(net, s_moveSnapshotsScratch);
                     s_moveSnapshotsScratch.Clear();
                     moveBytes = GetWireLineBaseBytes("MOBMOVE|");
                 }
 
+                RecordHostMobSendFrame(syncId);
                 s_moveSnapshotsScratch.Add(moveSnapshot);
                 moveBytes += moveEntryBytes;
             }
 
             if (s_batchSnapshotsScratch.Count > 0)
             {
-                MobSyncTrace.LogSendStatesBatch("host", s_batchSnapshotsScratch);
-                net.SendMobStates(s_batchSnapshotsScratch);
+                TrySendHostStatesBatchAsync(net, s_batchSnapshotsScratch);
                 s_batchSnapshotsScratch.Clear();
             }
 
             if (s_moveSnapshotsScratch.Count > 0)
             {
-                MobSyncTrace.LogSendMovesBatch("host", s_moveSnapshotsScratch);
-                net.SendMobMoves(s_moveSnapshotsScratch);
+                TrySendHostMovesBatchAsync(net, s_moveSnapshotsScratch);
                 s_moveSnapshotsScratch.Clear();
             }
+        }
+
+        private static void TrySendHostStatesBatchAsync(NetNode net, List<NetNode.MobStateSnapshot> batch)
+        {
+            MobSyncTrace.LogSendStatesBatch("host", batch);
+            if (Volatile.Read(ref s_pendingHostBatchCount) >= 2)
+                return;
+
+            var copy = new List<NetNode.MobStateSnapshot>(batch);
+            Interlocked.Increment(ref s_pendingHostBatchCount);
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { net.SendMobStates(copy); }
+                finally { Interlocked.Decrement(ref s_pendingHostBatchCount); }
+            });
+        }
+
+        private static void TrySendHostMovesBatchAsync(NetNode net, List<NetNode.MobMoveSnapshot> batch)
+        {
+            MobSyncTrace.LogSendMovesBatch("host", batch);
+            if (Volatile.Read(ref s_pendingHostBatchCount) >= 2)
+                return;
+
+            var copy = new List<NetNode.MobMoveSnapshot>(batch);
+            Interlocked.Increment(ref s_pendingHostBatchCount);
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { net.SendMobMoves(copy); }
+                finally { Interlocked.Decrement(ref s_pendingHostBatchCount); }
+            });
+        }
+
+        private static bool IsHostMobMoveDue(Mob mob, int syncId)
+        {
+            var interval = GetHostMobMoveInterval(mob);
+            if (interval <= 0)
+                return true;
+
+            lock (Sync)
+            {
+                if (hostLastSendFrameBySyncId.TryGetValue(syncId, out var lastFrame))
+                {
+                    var frame = GetCurrentFrame(mob);
+                    return frame - lastFrame >= interval;
+                }
+
+                return true;
+            }
+        }
+
+        private static void RecordHostMobSendFrame(int syncId)
+        {
+            lock (Sync)
+            {
+                hostLastSendFrameBySyncId[syncId] = GetCurrentFrame(null);
+            }
+        }
+
+        private static double GetHostMobMoveInterval(Mob mob)
+        {
+            if (mob == null)
+                return 1.0;
+
+            var priority = GetHostMobSyncPriority(mob);
+            return priority switch
+            {
+                HostMobSyncPriority.Active => 2.0,
+                HostMobSyncPriority.MidRange => 4.0,
+                HostMobSyncPriority.Dormant => 12.0,
+                _ => 1.0
+            };
         }
 
         private static bool TryBuildHostDirtySnapshotForQueue(
@@ -622,6 +704,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             hostObservedMobStatesBySyncId.Clear();
             hostDirtyFlagsBySyncId.Clear();
             hostDirtyQueuedSyncIds.Clear();
+            hostLastSendFrameBySyncId.Clear();
             while (hostDirtyMobQueue.Count > 0)
                 hostDirtyMobQueue.Dequeue();
 

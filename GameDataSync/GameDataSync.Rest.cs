@@ -27,7 +27,7 @@ namespace DeadCellsMultiplayerMod
     internal partial class GameDataSync
     {
 
-        private static void CopyStoryVisitedLoreRoomsToSet(virtual_exists_get_iterator_keys_remove_set_toString_? map, HashSet<string> target)
+        private static void CopyStoryVisitedLoreRoomsToSet(dynamic? map, HashSet<string> target)
         {
             target.Clear();
             if (map == null)
@@ -103,7 +103,7 @@ namespace DeadCellsMultiplayerMod
             return map;
         }
 
-        private static void ApplyStoryStringIntMap(virtual_exists_get_iterator_keys_remove_set_toString_? map, Dictionary<string, int> values)
+        private static void ApplyStoryStringIntMap(dynamic? map, Dictionary<string, int> values)
         {
             if (map == null)
                 return;
@@ -140,7 +140,7 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static void ApplyStoryVisitedLoreRoomsMap(virtual_exists_get_iterator_keys_remove_set_toString_? map, HashSet<string> values)
+        private static void ApplyStoryVisitedLoreRoomsMap(dynamic? map, HashSet<string> values)
         {
             if (map == null)
                 return;
@@ -250,12 +250,13 @@ namespace DeadCellsMultiplayerMod
             {
             }
 
-            story.counters = BuildCountersMap(counters);
-            story.npcProgresses = BuildNpcProgressMap(npcProgress);
-            ApplyStoryStringIntMap(story.loreRoomRunIds, loreRoomRunIds);
-            ApplyStoryVisitedLoreRoomsMap(story.visitedLoreRooms, visitedLoreRooms);
-            story.plannedLores = BuildStoryPlannedLoresArray(plannedLores);
-            story.storyDataVersion = storyDataVersion;
+            dynamic dynStory = story;
+            dynStory.counters = BuildCountersMap(counters);
+            dynStory.npcProgresses = BuildNpcProgressMap(npcProgress);
+            ApplyStoryStringIntMap(dynStory.loreRoomRunIds, loreRoomRunIds);
+            ApplyStoryVisitedLoreRoomsMap(dynStory.visitedLoreRooms, visitedLoreRooms);
+            dynStory.plannedLores = BuildStoryPlannedLoresArray(plannedLores);
+            dynStory.storyDataVersion = storyDataVersion;
             return story;
         }
 

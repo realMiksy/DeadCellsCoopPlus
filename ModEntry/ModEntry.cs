@@ -24,6 +24,7 @@ using dc.cine.dlcp;
 using dc.cine.kf;
 using dc.cine.queen;
 using CineHookInitialize;
+
 using DeadCellsMultiplayerMod.Ghost.GhostBase;
 using ModCore.Events;
 using DeadCellsMultiplayerMod.Mobs.MobsSynchronization;
@@ -92,10 +93,8 @@ namespace DeadCellsMultiplayerMod
         public static Hero me = null!;
         public static GhostHero _ghost = null!;
 
-        private GameDataSync? gds;
         private Hero? _debugPerkAppliedHero;
         private string _debugPerkAppliedId = string.Empty;
-        private string _lastDebugPerkApplyErrorId = string.Empty;
         private long _nextDebugPerkApplyTick;
         private ItemMetaManager? _debugExplorerRuneInjectedMeta;
         private bool _debugExplorerRuneInjectedByDebug;
@@ -124,7 +123,6 @@ namespace DeadCellsMultiplayerMod
         public string remoteSkin = string.Empty;
         public string remoteHeadSkin = string.Empty;
 
-        public string lastHeadAnim = string.Empty;
         public static ArrayDyn customHeads = null!;
 
         public InventItem inventItem = null!;
@@ -185,10 +183,8 @@ namespace DeadCellsMultiplayerMod
         private readonly Dictionary<int, RemoteDownedCorpse> _remoteDownedCines = new();
         private readonly HashSet<int> _downedAnnouncements = new();
         private readonly Dictionary<int, RemoteDoorMarkerState> _remoteLastDoorMarkers = new();
-        private readonly Dictionary<int, RemoteDoorMarkerState> _remotePendingDoorMarkers = new();
         private readonly Dictionary<int, long> _pendingClientDisposeTicks = new();
         private const double ClientDisposeTransitionSeconds = 0.28;
-        private const double PendingDoorMarkerHideMaxSeconds = 1.5;
         private const double GhostHeadDormantUpdateSeconds = 0.20;
         private const double GhostHeadRecreateRetrySeconds = 0.25;
 
@@ -329,7 +325,6 @@ namespace DeadCellsMultiplayerMod
             s_steamOverlayCallbackRetryCount = 0;
             _debugPerkAppliedHero = null;
             _debugPerkAppliedId = string.Empty;
-            _lastDebugPerkApplyErrorId = string.Empty;
             _nextDebugPerkApplyTick = 0;
             _debugExplorerRuneInjectedMeta = null;
             _debugExplorerRuneInjectedByDebug = false;
@@ -343,7 +338,6 @@ namespace DeadCellsMultiplayerMod
         {
             Instance = this;
 
-            this.gds = new GameDataSync(Logger);
             InitializeOptionalModule(
                 DebugModuleId.MultiplayerModLang,
                 "MultiplayerModLang",
@@ -429,6 +423,8 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.checkCursedWeaponHit += Hook_Hero_checkCursedWeaponHit;
             Hook_Hero.startDeathCine += Hook_Hero_startDeathCine;
             Hook_Hero.onHeroDie += Hook_Hero_onHeroDie;
+            Hook_Hero.canBeHitBy += Hook_Hero_canBeHitBy;
+            Hook_Game.hasCinematic += Hook_Game_hasCinematic;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
             Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
@@ -454,8 +450,6 @@ namespace DeadCellsMultiplayerMod
             Hook__SmashCinem.__constructor__ += Hook__SmashCinem__constructor__;
             Hook__EndCollectorPostSmash.__constructor__ += Hook__EndCollectorPostSmash__constructor__;
             Hook__EndCollectorPostSmashKS.__constructor__ += Hook__EndCollectorPostSmashKS__constructor__;
-            // Hook_Hero.tryToApplyYoloPerk += Hook_Hero_tryToApplyYoloPerk;
-            // Hook_Hero.onEnterRoom += 
             Ghost.KingWeaponHooks.Install();
         }
 
@@ -664,20 +658,6 @@ namespace DeadCellsMultiplayerMod
                 MarkBossCineCompleted(senderLevelId);
         }
 
-        private void Hook_Hero_lockControlFromSkill(Hook_Hero.orig_lockControlFromSkill orig, Hero self, double sec)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, sec);
-        }
-
-        private void Hook_Hero_unlockControls(Hook_Hero.orig_unlockControls orig, Hero self)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self);
-        }
-
         private void Hook_User_unserialize(Hook_User.orig_unserialize orig, User self, dc.hxbit.Serializer v)
         {
             orig(self, v);
@@ -722,60 +702,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             orig(u, onlyGameData);
-        }
-
-        private void Hook_Viewport_bumpDir(Hook_Viewport.orig_bumpDir orig, Viewport self, int dir, double? pow)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext)
-                return;
-            orig(self, dir, pow);
-        }
-
-        private void Hook_Entity_recoil(Hook_Entity.orig_recoil orig, Entity self, double dx)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, dx);
-        }
-
-        private void Hook_Entity_bump(Hook_Entity.orig_bump orig, Entity self, double dy, double ignoreResist, bool? dx)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, dy, ignoreResist, dx);
-        }
-
-        private void Hook_Entity_bumpAwayFrom(Hook_Entity.orig_bumpAwayFrom orig, Entity self, Entity e, double? pow, bool? ignoreResist)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, e, pow, ignoreResist);
-        }
-
-        private void Hook_Entity_cancelVelocities(Hook_Entity.orig_cancelVelocities orig, Entity self)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self);
-        }
-
-        private void Hook_Entity_setAffectS(Hook_Entity.orig_setAffectS orig, Entity self, int id, double sec, Ref<double> ignoreResist, bool? allowResist)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, id, sec, ignoreResist, allowResist);
-        }
-
-        private void Hook_Entity_removeAllAffects(Hook_Entity.orig_removeAllAffects orig, Entity self, int list)
-        {
-            if(Ghost.KingWeaponSupport.IsInKingContext && me != null && ReferenceEquals(self, me))
-                return;
-            orig(self, list);
-        }
-
-        private void Hook_Hero_onLevelChanged()
-        {
-
         }
 
 
@@ -1086,7 +1012,27 @@ namespace DeadCellsMultiplayerMod
             RuntimeHitchWatch.LogSlow(Logger, key, stepMs, details);
         }
 
+        private bool Hook_Game_hasCinematic(Hook_Game.orig_hasCinematic orig, dc.pr.Game self)
+        {
+            if (IsModFakeDeathCine(self?.curCine))
+                return false;
 
+            return orig(self);
+        }
+
+        private bool Hook_Hero_canBeHitBy(Hook_Hero.orig_canBeHitBy orig, Hero self, dc.Entity by)
+        {
+            return orig(self, by);
+        }
+
+        private static bool IsModFakeDeathCine(dc.GameCinematic? cine)
+        {
+            if (cine == null || cine.destroyed)
+                return false;
+
+            var type = cine.GetType();
+            return type == typeof(DeadBase) || type == typeof(RemoteDownedCorpse);
+        }
 
     }
 }

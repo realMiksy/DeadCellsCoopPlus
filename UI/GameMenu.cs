@@ -1,15 +1,11 @@
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
-using System.Globalization;
-using System.Reflection;
-using ModCore.Menu;
 using dc.pr;
 using dc.ui;
 using Newtonsoft.Json;
 using Serilog;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
-using DeadCellsMultiplayerMod.Tools;
 using ModCore.Modules;
 using HaxeProxy.Runtime;
 
@@ -26,32 +22,11 @@ namespace DeadCellsMultiplayerMod
         private static int? _remoteSeed;
         private const int MaxSeed = 999_999;
         public static NetNode? NetRef { get; set; }
-        private readonly struct MainThreadWorkItem
-        {
-            public readonly Action? Action;
-            public readonly string? CoalesceKey;
-
-            public MainThreadWorkItem(Action action)
-            {
-                Action = action;
-                CoalesceKey = null;
-            }
-
-            public MainThreadWorkItem(string coalesceKey)
-            {
-                Action = null;
-                CoalesceKey = coalesceKey;
-            }
-        }
-
-        private static readonly ConcurrentQueue<MainThreadWorkItem> _mainThreadQueue = new();
-        private static readonly ConcurrentDictionary<MethodInfo, string> _mainThreadActionLabelCache = new();
+        private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
         private static readonly object MainThreadCoalesceSync = new();
-        private static readonly Dictionary<string, Action> _coalescedMainThreadActions = new(StringComparer.Ordinal);
-        private static readonly HashSet<string> _pendingCoalescedMainThreadKeys = new(StringComparer.Ordinal);
-        private static int _mainThreadQueueDepth;
+        private static readonly Dictionary<string, Action> _coalescedActions = new(StringComparer.Ordinal);
+        private static readonly ConcurrentQueue<string> _coalescedKeys = new();
         private const int MainThreadQueueMaxActionsPerPump = 64;
-        private const double MainThreadQueueBudgetMs = 4.0;
 
         private static bool _menuHooksAttached;
         private static bool _addMenuHookRegistered;
@@ -123,9 +98,6 @@ namespace DeadCellsMultiplayerMod
 
         /// <summary>True while clipboard/overlay join is resolving the Steam lobby.</summary>
         internal static bool IsSteamJoinLobbyResolvePending() => _steamJoinLobbyResolvePending;
-        private static bool _localReady;
-        private static List<PlayerInfo> _playersDisplay = new();
-        private static bool _genArrived;
         private static LevelDescSync? _cachedLevelDescSync;
         private static readonly object TextInputSync = new();
         private static WeakReference<TextInput?>? _activeTextInputRef;
@@ -174,7 +146,6 @@ namespace DeadCellsMultiplayerMod
                 _levelDescArrived = false;
                 _pendingAutoStart = false;
                 _autoStartTriggered = false;
-                _genArrived = false;
                 _seedArrived = false;
                 _clientConnectAttempt = 0;
                 _clientConnecting = false;
@@ -188,12 +159,8 @@ namespace DeadCellsMultiplayerMod
                 _steamLobbyId = 0;
                 _steamLobbyCode = string.Empty;
                 _steamHostSteamId = 0UL;
-                _mainThreadQueueDepth = _mainThreadQueue.Count;
                 lock (MainThreadCoalesceSync)
-                {
-                    _coalescedMainThreadActions.Clear();
-                    _pendingCoalescedMainThreadKeys.Clear();
-                }
+                    _coalescedActions.Clear();
             }
 
             InitializeMenuUiHooks();
@@ -202,8 +169,7 @@ namespace DeadCellsMultiplayerMod
         internal static void EnqueueMainThread(Action action)
         {
             if (action == null) return;
-            _mainThreadQueue.Enqueue(new MainThreadWorkItem(action));
-            Interlocked.Increment(ref _mainThreadQueueDepth);
+            _mainThreadQueue.Enqueue(action);
         }
 
         internal static void EnqueueMainThreadCoalesced(string coalesceKey, Action action)
@@ -217,51 +183,42 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            var shouldEnqueue = false;
+            bool isNewKey;
             lock (MainThreadCoalesceSync)
             {
-                _coalescedMainThreadActions[coalesceKey] = action;
-                if (_pendingCoalescedMainThreadKeys.Add(coalesceKey))
-                    shouldEnqueue = true;
+                isNewKey = !_coalescedActions.ContainsKey(coalesceKey);
+                _coalescedActions[coalesceKey] = action;
             }
 
-            if (!shouldEnqueue)
-                return;
-
-            _mainThreadQueue.Enqueue(new MainThreadWorkItem(coalesceKey));
-            Interlocked.Increment(ref _mainThreadQueueDepth);
+            if (isNewKey)
+                _coalescedKeys.Enqueue(coalesceKey);
         }
 
         internal static void ProcessMainThreadQueue()
         {
-            var hitchStart = RuntimeHitchWatch.Start();
-            var perfEnabled = RuntimeHitchWatch.Enabled;
-            var startDepth = Volatile.Read(ref _mainThreadQueueDepth);
             var processed = 0;
-            var slowActions = 0;
-            var maxActionMs = 0.0;
-            var maxActionLabel = string.Empty;
-            var actionsStart = RuntimeHitchWatch.Start();
-            while (_mainThreadQueue.TryDequeue(out var workItem))
+            while (processed < MainThreadQueueMaxActionsPerPump)
             {
-                Interlocked.Decrement(ref _mainThreadQueueDepth);
-                Action? action = workItem.Action;
-                var actionLabel = workItem.CoalesceKey;
-                if (actionLabel != null)
+                Action? action = null;
+                if (_mainThreadQueue.TryDequeue(out var direct))
+                {
+                    action = direct;
+                }
+                else if (_coalescedKeys.TryDequeue(out var key))
                 {
                     lock (MainThreadCoalesceSync)
                     {
-                        _pendingCoalescedMainThreadKeys.Remove(actionLabel);
-                        _coalescedMainThreadActions.TryGetValue(actionLabel, out action);
-                        _coalescedMainThreadActions.Remove(actionLabel);
+                        _coalescedActions.TryGetValue(key, out action);
+                        _coalescedActions.Remove(key);
                     }
                 }
+                else
+                    break;
 
                 if (action == null)
                     continue;
 
                 processed++;
-                var actionStart = perfEnabled ? RuntimeHitchWatch.Start() : 0;
                 try
                 {
                     action();
@@ -270,88 +227,7 @@ namespace DeadCellsMultiplayerMod
                 {
                     _log?.Warning("[NetMod] Main thread task failed: {Message}", ex.Message);
                 }
-                finally
-                {
-                    if (perfEnabled)
-                    {
-                        var actionMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionStart);
-                        if (actionMs > maxActionMs)
-                        {
-                            actionLabel ??= DescribeMainThreadAction(action);
-                            maxActionMs = actionMs;
-                            maxActionLabel = actionLabel;
-                        }
-
-                        if (actionMs >= RuntimeHitchWatch.MainThreadQueueActionSlowThresholdMs)
-                        {
-                            slowActions++;
-                            actionLabel ??= DescribeMainThreadAction(action);
-                            RuntimeHitchWatch.LogSlow(
-                                _log,
-                                $"GameMenu.MainThreadQueueAction:{actionLabel}",
-                                actionMs,
-                                string.Create(
-                                    CultureInfo.InvariantCulture,
-                                    $"action={actionLabel} processed={processed} startDepth={startDepth}"));
-                        }
-                    }
-                }
-
-                if (processed >= MainThreadQueueMaxActionsPerPump)
-                    break;
-                if (RuntimeHitchWatch.GetElapsedMilliseconds(actionsStart) >= MainThreadQueueBudgetMs)
-                    break;
             }
-            var actionsMs = RuntimeHitchWatch.GetElapsedMilliseconds(actionsStart);
-
-            var remainingDepth = Volatile.Read(ref _mainThreadQueueDepth);
-            var observedDepth = System.Math.Max(startDepth, remainingDepth);
-            if (perfEnabled && observedDepth >= RuntimeHitchWatch.MainThreadQueueDepthThreshold)
-            {
-                RuntimeHitchWatch.LogCount(
-                    _log,
-                    "GameMenu.MainThreadQueueDepth",
-                    observedDepth,
-                    RuntimeHitchWatch.MainThreadQueueDepthThreshold,
-                    string.Create(CultureInfo.InvariantCulture, $"processed={processed} remaining={remainingDepth}"));
-            }
-
-            if (actionsMs >= RuntimeHitchWatch.MainThreadQueueActionsSlowThresholdMs)
-            {
-                RuntimeHitchWatch.LogSlow(
-                    _log,
-                    "GameMenu.ExecuteMainThreadActions",
-                    actionsMs,
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"processed={processed} slowActions={slowActions} maxAction={maxActionLabel} maxMs={maxActionMs:0.00} remaining={remainingDepth}"));
-            }
-
-            var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-            if (hitchMs >= RuntimeHitchWatch.MainThreadQueueSlowThresholdMs)
-            {
-                RuntimeHitchWatch.LogSlow(
-                    _log,
-                    "GameMenu.ProcessMainThreadQueue",
-                    hitchMs,
-                    string.Create(CultureInfo.InvariantCulture, $"processed={processed} startDepth={startDepth} remaining={remainingDepth}"));
-            }
-        }
-
-        private static string DescribeMainThreadAction(Action? action)
-        {
-            if (action == null)
-                return "null";
-
-            var method = action.Method;
-            return _mainThreadActionLabelCache.GetOrAdd(method, static m =>
-            {
-                var declaringType = m.DeclaringType?.FullName;
-                if (!string.IsNullOrWhiteSpace(declaringType))
-                    return $"{declaringType}.{m.Name}";
-
-                return m.Name;
-            });
         }
 
         public static void MarkInRun()
@@ -884,7 +760,7 @@ namespace DeadCellsMultiplayerMod
             screen.addMenu(MakeHLString(text), cb, MakeHLString(string.Empty), false, Ref<int>.From(ref colorVal));
         }
 
-        private static void NativeStartSteamHost(TitleScreen screen)
+        private static void SharedStartSteamHost(Action<string, string, Action> showError, Action showStatus, Action showTransport)
         {
             _menuSelection = NetRole.Host;
             _menuTransport = ConnectionTransport.Steam;
@@ -899,9 +775,9 @@ namespace DeadCellsMultiplayerMod
             if (NetRef == null || !NetRef.IsAlive || !NetRef.IsHost)
             {
                 _log?.Warning("[NetMod][Steam] Host start failed: host server was not created");
-                ShowConnectionErrorPopup(screen, GetText.Instance.GetString("Steam host failed"),
+                showError(GetText.Instance.GetString("Steam host failed"),
                     GetText.Instance.GetString("Could not start Steam host. Check console logs."),
-                    () => ShowHostTransportMenu(screen));
+                    showTransport);
                 return;
             }
 
@@ -910,9 +786,9 @@ namespace DeadCellsMultiplayerMod
             {
                 StopNetworkFromMenu();
                 _log?.Warning("[NetMod][SteamWorkerError] {Error}", lobby?.Error ?? "Lobby creation failed");
-                ShowConnectionErrorPopup(screen, GetText.Instance.GetString("Steam host failed"),
+                showError(GetText.Instance.GetString("Steam host failed"),
                     GetText.Instance.GetString("Steam lobby creation failed. Check console logs."),
-                    () => ShowHostTransportMenu(screen));
+                    showTransport);
                 return;
             }
 
@@ -930,20 +806,20 @@ namespace DeadCellsMultiplayerMod
             if (copied)
                 MultiplayerUI.PushSystemMessage("Lobby id copied to clipboard");
 
-            ShowHostStatusMenu(screen);
-            screen.ShouldAutoHideConnectionUI(true);
+            showStatus();
+        }
+
+        private static void NativeStartSteamHost(TitleScreen screen)
+        {
+            SharedStartSteamHost(
+                showError: (title, details, onOk) => ShowConnectionErrorPopup(screen, title, details, onOk),
+                showStatus: () => { ShowHostStatusMenu(screen); screen.ShouldAutoHideConnectionUI(true); },
+                showTransport: () => ShowHostTransportMenu(screen)
+            );
         }
 
         private static void NativeStartSteamJoin(TitleScreen screen)
         {
-            _menuSelection = NetRole.Client;
-            _menuTransport = ConnectionTransport.Steam;
-            _steamLobbyActive = false;
-            _steamLobbyId = 0;
-            _steamLobbyCode = string.Empty;
-            _steamHostSteamId = 0UL;
-            ApplySteamPersonaUsername();
-
             _steamJoinLobbyResolvePending = true;
             _waitingForHost = true;
             _clientConnecting = true;
@@ -960,6 +836,16 @@ namespace DeadCellsMultiplayerMod
 
         private static void ApplySteamJoinResult(TitleScreen screen, bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay)
         {
+            SharedApplySteamJoinResult(ok, join, fromOverlay,
+                showError: (title, details, onBack) => ShowConnectionErrorPopup(screen, title, details, onBack),
+                showStatus: () => { ShowClientWaitingMenu(screen); screen.ShouldAutoHideConnectionUI(true); },
+                showTransport: () => ShowJoinTransportMenu(screen)
+            );
+        }
+
+        private static void SharedApplySteamJoinResult(bool ok, SteamConnect.JoinLobbyResult join, bool fromOverlay,
+            Action<string, string, Action> showError, Action showStatus, Action showTransport)
+        {
             _steamJoinLobbyResolvePending = false;
 
             if (fromOverlay)
@@ -969,9 +855,9 @@ namespace DeadCellsMultiplayerMod
             {
                 StopNetworkFromMenu();
                 _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
-                ShowConnectionErrorPopup(screen, GetText.Instance.GetString("Steam join failed"),
+                showError(GetText.Instance.GetString("Steam join failed"),
                     GetText.Instance.GetString("Steam join failed. Check console logs."),
-                    () => ShowJoinTransportMenu(screen));
+                    showTransport);
                 return;
             }
 
@@ -980,9 +866,9 @@ namespace DeadCellsMultiplayerMod
 
             if (join.HostSteamId == 0UL && join.Endpoint == null)
             {
-                ShowConnectionErrorPopup(screen, GetText.Instance.GetString("Steam join failed"),
+                showError(GetText.Instance.GetString("Steam join failed"),
                     GetText.Instance.GetString("Steam lobby endpoint is invalid. Check console logs."),
-                    () => ShowJoinTransportMenu(screen));
+                    showTransport);
                 return;
             }
 
@@ -999,9 +885,17 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             _log?.Information("[NetMod][Steam] Joined lobby: id={LobbyId} code={LobbyCode} hostSteamId={HostSteamId}", _steamLobbyId, _steamLobbyCode, _steamHostSteamId);
 
-            StartNetwork(NetRole.Client, screen);
-            ShowClientWaitingMenu(screen);
-            screen.ShouldAutoHideConnectionUI(true);
+            var ts = GetTitleScreen();
+            if (ts == null)
+            {
+                showError(GetText.Instance.GetString("Steam join failed"),
+                    GetText.Instance.GetString("Main menu is not available."),
+                    showTransport);
+                return;
+            }
+
+            StartNetwork(NetRole.Client, ts);
+            showStatus();
         }
 
         internal static void HandleSteamOverlayJoinRequest(ulong lobbyId)
@@ -1162,20 +1056,6 @@ namespace DeadCellsMultiplayerMod
                 _log?.Warning("[NetMod] Failed to start host run: {Message}", ex.Message);
             }
         }
-
-        // private static void GameDisposeHook(Hook_Game.orig_onDispose orig, Game self)
-        // {
-        //     try
-        //     {
-        //         HandleWorldExit(isDisposeHook: true);
-        //     }
-        //     catch (Exception ex)
-        //     {
-        //         _log?.Warning("[NetMod] onDispose hook error: {Message}", ex.Message);
-        //     }
-
-        //     orig(self);
-        // }
 
         private static void HandleWorldExit(bool isDisposeHook = false)
         {

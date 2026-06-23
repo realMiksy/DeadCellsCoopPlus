@@ -328,7 +328,6 @@ namespace DeadCellsMultiplayerMod
                 ? string.Empty
                 : levelId.Trim();
             _localLastDoorMarkerToken = markerToken;
-            _remotePendingDoorMarkers.Clear();
         }
 
         double last_x, last_y;
@@ -445,7 +444,7 @@ namespace DeadCellsMultiplayerMod
             {
                 bool fromUI = false;
                 var attachRoot = new dc.h2d.Object(client.spr);
-                var newHead = new Kinghead(localHero, client, localLevel, Logger);
+                var newHead = new Kinghead(localHero, client, localLevel);
                 newHead.init(localLevel, attachRoot, Ref<bool>.From(ref fromUI));
                 clientHeads[slot] = newHead;
                 client.head = newHead;
@@ -714,7 +713,7 @@ namespace DeadCellsMultiplayerMod
                 LevelId = markerLevelId,
                 UpdatedAtTicks = Stopwatch.GetTimestamp()
             };
-            _remotePendingDoorMarkers.Remove(remote.Id);
+
         }
 
         private void QueueClientDisposeWithTransition(int slot)
@@ -831,7 +830,6 @@ namespace DeadCellsMultiplayerMod
             if (previousRemoteId > 0)
             {
                 _remoteLastDoorMarkers.Remove(previousRemoteId);
-                _remotePendingDoorMarkers.Remove(previousRemoteId);
                 ClearCachedRemoteDiveSkillInfo(previousRemoteId);
             }
 
@@ -1343,7 +1341,6 @@ namespace DeadCellsMultiplayerMod
             _localLastDoorMarkerLevelId = string.Empty;
             _localLastDoorMarkerToken = int.MinValue;
             _remoteLastDoorMarkers.Clear();
-            _remotePendingDoorMarkers.Clear();
             _pendingClientDisposeTicks.Clear();
         }
 

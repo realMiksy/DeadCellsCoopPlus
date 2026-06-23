@@ -57,26 +57,6 @@ namespace DeadCellsMultiplayerMod
             System.IO.File.WriteAllText(path, $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z | {callbackType} | {data}");
         }
 
-        private static void WriteOverlayCallbackFailedDiagnostics(Exception ex)
-        {
-            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dccm_overlay_callback_failed.txt");
-            var lines = new[]
-            {
-                $"DCCM Steam overlay callback registration failed - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z",
-                $"Message: {ex.Message}",
-                $"Type: {ex.GetType().FullName}",
-                ex.StackTrace ?? "(no stack trace)"
-            };
-            System.IO.File.WriteAllLines(path, lines);
-        }
-
-        private static void TryRegisterSteamOverlayJoinCallback()
-        {
-            if (s_steamOverlayJoinCallback != null)
-                return;
-            s_steamOverlayJoinCallback = Callback<GameLobbyJoinRequested_t>.Create(OnGameLobbyJoinRequested);
-        }
-
         private static void OnGameLobbyJoinRequested(GameLobbyJoinRequested_t data)
         {
             WriteOverlayJoinDiagnostic("GameLobbyJoinRequested_t", data.m_steamIDLobby.m_SteamID.ToString());

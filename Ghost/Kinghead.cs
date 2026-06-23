@@ -31,18 +31,15 @@ namespace DeadCellsMultiplayerMod.KingHead
         private double _lastForcedPosY = double.NaN;
         private const double ForcedPositionEpsilon = 0.05;
 
-        private Serilog.ILogger? _log;
-
         public Kinghead()
         {
         }
 
-        public Kinghead(Hero _me, GhostKing _kingSkin, Level level, Serilog.ILogger log)
+        public Kinghead(Hero _me, GhostKing _kingSkin, Level level)
         {
             me = _me;
             king = _kingSkin;
             lvl = level;
-            _log = log;
             TryBindHeroField(_me);
         }
 
@@ -68,25 +65,6 @@ namespace DeadCellsMultiplayerMod.KingHead
         void IHxbitSerializable<object>.SetData(object data)
         {
         }
-
-        // public new void customHeadFx()
-        // {
-        //     var data = this.forcedCustomHead ?? this._customHeadInfoCache;
-        //     if (data?.particleEffects == null)
-        //         return;
-
-        //     var arr = data.particleEffects;
-        //     for (int i = arr.length - 1; i >= 0; i--)
-        //     {
-        //         if (arr.getDyn(i) == null)
-        //             arr.splice(i, 1);
-        //     }
-
-        //     if (arr.length == 0)
-        //         return;
-
-        //     base.customHeadFx();
-        // }
 
         public override void init(Level parent, dc.h2d.Object fromUI, Ref<bool> fromUI1)
         {

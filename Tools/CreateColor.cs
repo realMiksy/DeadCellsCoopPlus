@@ -1,6 +1,6 @@
 namespace DeadCellsMultiplayerMod.Tools
 {
-    public static  class MultiColor
+    public static class MultiColor
     {
         public static int CreateColor(int r, int g, int b, int a = 255)
         {

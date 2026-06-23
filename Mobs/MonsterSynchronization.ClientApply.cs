@@ -43,9 +43,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 var currentX = GetWorldX(self);
                 var currentY = GetWorldY(self);
                 var interpolationAlpha = GetClientInterpolationAlpha();
-                var lerpedX = currentX + (target.X - currentX) * interpolationAlpha;
+
+                // Dead reckoning: extrapolate from last authoritative state using host-reported velocity.
+                // This allows mobs to move smoothly between reduced-rate snapshots instead of lagging behind.
+                double predictedX, predictedY;
+                if (target.Time > 0.0 && (System.Math.Abs(target.Dx) > 0.001 || System.Math.Abs(target.Dy) > 0.001))
+                {
+                    var elapsed = GetCurrentFrame(self) - target.Time;
+                    if (elapsed > 0.0 && elapsed < 60.0)
+                    {
+                        predictedX = target.X + target.Dx * elapsed;
+                        predictedY = target.Y + target.Dy * elapsed;
+                    }
+                    else
+                    {
+                        predictedX = target.X;
+                        predictedY = target.Y;
+                    }
+                }
+                else
+                {
+                    predictedX = target.X;
+                    predictedY = target.Y;
+                }
+
+                var lerpedX = currentX + (predictedX - currentX) * interpolationAlpha;
                 var lerpedY = syncY
-                    ? currentY + (target.Y - currentY) * interpolationAlpha
+                    ? currentY + (predictedY - currentY) * interpolationAlpha
                     : currentY;
 
                 try
@@ -197,7 +221,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (responsiveDir != 0)
                 self.dir = responsiveDir;
 
-            if (HasLocalQueuedOrChargingSkill(self))
+            if (HasLocalQueuedOrChargingSkill(self) || IsClientNetworkAttackActive(self))
                 return;
 
             if (!shouldApplyAnimThisFrame)

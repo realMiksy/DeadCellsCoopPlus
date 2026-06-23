@@ -91,12 +91,6 @@ namespace DeadCellsMultiplayerMod.MultiplayerModUI.Connection
             };
 
 
-            // for (int i = 0; i < sprx.Count; i++)
-            // {
-
-            //     loadspr(sprx[i], sprmodu[i], i);
-            // }
-
         }
 
         private List<double> sprx = new List<double> { 0.4, -1.0, -0.2, -0.6 };

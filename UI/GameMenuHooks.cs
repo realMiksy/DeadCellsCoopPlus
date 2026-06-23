@@ -35,7 +35,6 @@ namespace DeadCellsMultiplayerMod
                 Hook_TitleScreen.addMenu += AddMenuHook;
                 _addMenuHookRegistered = true;
             }
-            MainThreadDispatcher.SetMainMenuReady();
             TryDisconnectWhenReturningToMainMenu();
             StoreTitleScreen(self);
             ConnectionUI.EnsureCreated(self);

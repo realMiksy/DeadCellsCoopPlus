@@ -53,7 +53,6 @@ public class Levelinit : ModBase, IEventReceiver, IOnAdvancedModuleInitializing
 
     private void Levelinit_OnDispose(Hook_Level.orig_onDispose orig, Level self)
     {
-        SyncMobIdRegistry.ClearForLevel(self);
         orig(self);
     }
 
@@ -323,7 +322,7 @@ public class Levelinit : ModBase, IEventReceiver, IOnAdvancedModuleInitializing
             ["Shipwreck_underground"] = () => new Shipwreck(self, self.map, id, "Shipwreck_underground".AsHaxeString()),
             ["Template"] = () => new Template(self, self.map),
             ["TumulusInt"] = () => new Tumulus(self, self.map, id),
-            //["BackGarden"] = () => new GradenDisp(self, self.map, null!)
+
         };
 
         if (levelDispMappings.TryGetValue(id.ToString(), out var createLevelDispFunc))
@@ -534,7 +533,7 @@ public class Levelinit : ModBase, IEventReceiver, IOnAdvancedModuleInitializing
     private int RoundDown(double value)
     {
         int rounded = (int)value;
-        return (double)rounded < value ? rounded + 1 : rounded;
+        return (double)rounded > value ? rounded - 1 : rounded;
     }
 
     private void GenerateBats(Rand rand, Room room, Marker marker, dc.pr.Level level)

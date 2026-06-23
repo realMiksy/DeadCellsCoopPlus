@@ -514,6 +514,8 @@ namespace DeadCellsMultiplayerMod
 
         private void SuppressCineEffects()
         {
+            RestoreCineState();
+
             if (_cineSuppressed)
             {
                 TryKeepHudVisibleWhenAllowed();

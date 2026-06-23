@@ -422,16 +422,33 @@ internal static class MobSyncTrace
         int currentIdentityToken,
         int candidateIdentityToken)
     {
-        Log.Warning(
-            "[MobSync] REBUILD rejected reason={Reason} role={Role} level={LevelId} trackedCurrent={TrackedCurrent} entityCount={EntityCount} candidateTracked={CandidateTracked} currentIdentityToken={CurrentIdentityToken} candidateIdentityToken={CandidateIdentityToken}",
-            reason ?? string.Empty,
-            role ?? string.Empty,
-            levelId ?? string.Empty,
-            trackedCurrent,
-            entityCount,
-            candidateTracked,
-            currentIdentityToken,
-            candidateIdentityToken);
+        if (string.Equals(reason, "same_identity_empty", StringComparison.Ordinal) ||
+            string.Equals(reason, "replace_empty", StringComparison.Ordinal))
+        {
+            Log.Information(
+                "[MobSync] REBUILD rejected reason={Reason} role={Role} level={LevelId} trackedCurrent={TrackedCurrent} entityCount={EntityCount} candidateTracked={CandidateTracked} currentIdentityToken={CurrentIdentityToken} candidateIdentityToken={CandidateIdentityToken}",
+                reason ?? string.Empty,
+                role ?? string.Empty,
+                levelId ?? string.Empty,
+                trackedCurrent,
+                entityCount,
+                candidateTracked,
+                currentIdentityToken,
+                candidateIdentityToken);
+        }
+        else
+        {
+            Log.Warning(
+                "[MobSync] REBUILD rejected reason={Reason} role={Role} level={LevelId} trackedCurrent={TrackedCurrent} entityCount={EntityCount} candidateTracked={CandidateTracked} currentIdentityToken={CurrentIdentityToken} candidateIdentityToken={CandidateIdentityToken}",
+                reason ?? string.Empty,
+                role ?? string.Empty,
+                levelId ?? string.Empty,
+                trackedCurrent,
+                entityCount,
+                candidateTracked,
+                currentIdentityToken,
+                candidateIdentityToken);
+        }
     }
 
     public static void LogDeferredMobRegistration(string role, string levelId, string mobType)
