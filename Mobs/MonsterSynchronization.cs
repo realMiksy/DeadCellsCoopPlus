@@ -755,20 +755,39 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
 
             orig(self);
+
             if (TryIgnoreCommittedIdentityEntitiesPostCreate(self))
                 return;
 
             var rebuildAccepted = RebuildMobArray(self);
-            // Drop pending mob packets only when a rebuild was actually accepted and the live sync-id map changed.
             if (rebuildAccepted)
             {
                 try { GameMenu.NetRef?.ClearMobSyncQueues(); } catch { }
             }
+
+            // Native entitiesPostCreate rewrites mob HP (difficulty, affixes, etc.) which overwrites
+            // the multiplier we applied in registerEntity.  Re-apply it now that the mob is fully set up.
+            ApplyHpMultiplierToTrackedMobs();
         }
 
         private static void Hook_Level_registerEntity(Hook_Level.orig_registerEntity orig, Level self, Entity clid)
         {
             orig(self, clid);
+
+            // Prevent Null access .groupName crashes in vanilla applyAttackResult (e.g. dive attacks
+            // hitting entities whose sprite group hasn't been assigned).  Native entity init should
+            // always set groupName, but edge cases (spawn, level transition, remote ghosts) can leave
+            // it null.  A fallback groupName avoids the HashlinkError without hunting every code path.
+            if (clid is dc.Entity ety)
+            {
+                try
+                {
+                    var spr = ety.spr;
+                    if (spr != null && spr.groupName == null)
+                        spr.groupName = string.Empty.AsHaxeString();
+                }
+                catch { }
+            }
 
             if (clid is not Mob mob)
                 return;
@@ -776,7 +795,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (!IsSyncMob(mob))
                 return;
 
-            ScaleMobHpForMultiplayer(mob);
+            // Scale HP for later-spawned mobs (entitiesPostCreate already ran, won't run again).
+            BossHpScaling.ScaleForMultiplayer(mob);
 
             var registerSyncId = -1;
             var registerLocalIndex = -1;
@@ -1373,6 +1393,37 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return string.Create(
                     CultureInfo.InvariantCulture,
                     $"tracked={trackedMobs.Count} hostDirty={hostDirtyMobQueue.Count}/{hostDirtyFlagsBySyncId.Count} clientDirty={clientDirtyMobQueue.Count}/{clientDirtyFlagsBySyncId.Count} moves={s_moveSnapshotsScratch.Count} states={s_batchSnapshotsScratch.Count}");
+            }
+        }
+
+        private static void ApplyHpMultiplierToTrackedMobs()
+        {
+            if (!MultiplayerSettingsStorage.EnableMobsSync)
+                return;
+
+            try
+            {
+                List<Mob> snapshot;
+                lock (Sync)
+                {
+                    if (trackedMobs.Count == 0)
+                        return;
+                    snapshot = new List<Mob>(trackedMobs);
+                }
+
+                for (var i = 0; i < snapshot.Count; i++)
+                {
+                    try
+                    {
+                        BossHpScaling.ScaleForMultiplayer(snapshot[i]);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch
+            {
             }
         }
 
