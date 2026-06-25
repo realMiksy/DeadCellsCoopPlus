@@ -1346,6 +1346,7 @@ namespace DeadCellsMultiplayerMod
 
         private void ResetNetworkState()
         {
+            GameDataSync.RestoreOrigHpMultipliers();
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false);
             ResetLocalSkinSendCache();
             ResetDoorMarkerState();

@@ -25,6 +25,7 @@ public static class BossHpScaling
             var newLife = System.Math.Clamp((int)System.Math.Round(life * mult), 0, newMaxLife);
             mob.maxLife = newMaxLife;
             mob.life = newLife;
+            try { mob.initLife(newLife, newMaxLife); } catch { }
         }
         catch
         {

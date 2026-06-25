@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -137,6 +138,8 @@ public sealed partial class NetNode
                     string? cachedLevelDescPayload;
                     string? cachedLevelSeedPayload;
                     string? cachedLevelGraphPayload;
+                    double? cachedMobsHpMult;
+                    double? cachedBossesHpMult;
                     lock (_hostCacheSync)
                     {
                         cachedBossRune = _cachedHostBossRune;
@@ -146,6 +149,8 @@ public sealed partial class NetNode
                         cachedLevelDescPayload = _cachedHostLevelDescPayload;
                         cachedLevelSeedPayload = _cachedHostLevelSeedPayload;
                         cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
+                        cachedMobsHpMult = _cachedHostMobsHpMult;
+                        cachedBossesHpMult = _cachedHostBossesHpMult;
                     }
 
                     if (cachedSerializerSeq.HasValue && cachedSerializerUid.HasValue)
@@ -165,6 +170,9 @@ public sealed partial class NetNode
 
                     if (cachedLevelGraphPayload != null)
                         await SendLineToClientSafe(connection, $"LGRAPH|{cachedLevelGraphPayload}\n").ConfigureAwait(false);
+
+                    if (cachedMobsHpMult.HasValue && cachedBossesHpMult.HasValue)
+                        await SendLineToClientSafe(connection, $"HPMULT|{cachedMobsHpMult.Value.ToString(CultureInfo.InvariantCulture)}|{cachedBossesHpMult.Value.ToString(CultureInfo.InvariantCulture)}\n").ConfigureAwait(false);
                 }
 
                 GameMenu.EnqueueMainThreadCoalesced("net:remote-connected", () =>

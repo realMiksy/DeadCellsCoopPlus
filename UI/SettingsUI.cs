@@ -536,10 +536,12 @@ public class SettingsUI :
     private static void OnMobsHpSliderChanged(double value)
     {
         MultiplayerSettingsStorage.MobsHpMultiplier = value;
+        ModEntry._net?.SendHpMultipliers();
     }
 
     private static void OnBossesHpSliderChanged(double value)
     {
         MultiplayerSettingsStorage.BossesHpMultiplier = value;
+        ModEntry._net?.SendHpMultipliers();
     }
 }

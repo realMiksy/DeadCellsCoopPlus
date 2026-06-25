@@ -103,6 +103,29 @@ public sealed partial class NetNode
         // _log.Information("[NetNode] Sent boss rune {BossRune}", bossRune);
     }
 
+    public void SendHpMultipliers()
+    {
+        var mobsMult = MultiplayerSettingsStorage.MobsHpMultiplier;
+        var bossesMult = MultiplayerSettingsStorage.BossesHpMultiplier;
+        if (_role == NetRole.Host)
+        {
+            lock (_hostCacheSync)
+            {
+                _cachedHostMobsHpMult = mobsMult;
+                _cachedHostBossesHpMult = bossesMult;
+            }
+        }
+
+        if (!HasAnyConnection())
+        {
+            _log.Information("[NetNode] Skip sending HP multipliers: no connected client");
+            return;
+        }
+
+        var payload = $"{mobsMult.ToString(CultureInfo.InvariantCulture)}|{bossesMult.ToString(CultureInfo.InvariantCulture)}";
+        SendRaw("HPMULT|" + payload);
+    }
+
     public void SendLevelDesc(string json)
     {
         var safeJson = (json ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);

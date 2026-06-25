@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using DeadCellsMultiplayerMod;
 using Steamworks;
@@ -363,6 +364,8 @@ public sealed partial class NetNode
         string? cachedLevelGraphPayload;
         string? cachedHeroSkin;
         string? cachedHeroHeadSkin;
+        double? cachedMobsHpMult;
+        double? cachedBossesHpMult;
         lock (_hostCacheSync)
         {
             cachedBossRune = _cachedHostBossRune;
@@ -374,6 +377,8 @@ public sealed partial class NetNode
             cachedLevelGraphPayload = _cachedHostLevelGraphPayload;
             cachedHeroSkin = _cachedHostHeroSkin;
             cachedHeroHeadSkin = _cachedHostHeroHeadSkin;
+            cachedMobsHpMult = _cachedHostMobsHpMult;
+            cachedBossesHpMult = _cachedHostBossesHpMult;
         }
 
         if (cachedSerializerSeq.HasValue && cachedSerializerUid.HasValue)
@@ -395,6 +400,8 @@ public sealed partial class NetNode
         await SendKnownUsersToSteamClientSafe(connection).ConfigureAwait(false);
         if (_role == NetRole.Host && TryBuildLocalHpLine(out var localHpLine))
             await SendLineToSteamClientSafe(connection, localHpLine).ConfigureAwait(false);
+        if (cachedMobsHpMult.HasValue && cachedBossesHpMult.HasValue)
+            await SendLineToSteamClientSafe(connection, $"HPMULT|{cachedMobsHpMult.Value.ToString(CultureInfo.InvariantCulture)}|{cachedBossesHpMult.Value.ToString(CultureInfo.InvariantCulture)}\n").ConfigureAwait(false);
     }
 
     private async Task SendSteamHandshakeToSteamClient(SteamClientConnection connection)

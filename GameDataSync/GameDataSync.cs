@@ -57,6 +57,12 @@ namespace DeadCellsMultiplayerMod
         private static string? _lastHeroHeadSkinSyncPayload;
 
         private static string? _remoteCountersPayload;
+
+        private static double? _remoteMobsHpMult;
+        private static double? _remoteBossesHpMult;
+        private static bool _origHpMultipliersSaved;
+        private static double _origMobsHpMult;
+        private static double _origBossesHpMult;
         public static string? HostCountersPayload;
         private static string? _remoteBlueprintsPayload;
         public static string? HostBlueprintsPayload;
@@ -712,6 +718,47 @@ namespace DeadCellsMultiplayerMod
 
             bossRune = 0;
             return false;
+        }
+
+        public static void SaveOrigHpMultipliers()
+        {
+            if (_origHpMultipliersSaved)
+                return;
+            _origMobsHpMult = MultiplayerSettingsStorage.MobsHpMultiplier;
+            _origBossesHpMult = MultiplayerSettingsStorage.BossesHpMultiplier;
+            _origHpMultipliersSaved = true;
+        }
+
+        public static void RestoreOrigHpMultipliers()
+        {
+            if (!_origHpMultipliersSaved)
+                return;
+            MultiplayerSettingsStorage.MobsHpMultiplier = _origMobsHpMult;
+            MultiplayerSettingsStorage.BossesHpMultiplier = _origBossesHpMult;
+            _remoteMobsHpMult = null;
+            _remoteBossesHpMult = null;
+            _origHpMultipliersSaved = false;
+        }
+
+        public static void ReceiveHpMultipliers(string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+                return;
+
+            var parts = payload.Split('|');
+            if (parts.Length < 2)
+                return;
+
+            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var mobsMult))
+                return;
+            if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var bossesMult))
+                return;
+
+            SaveOrigHpMultipliers();
+            _remoteMobsHpMult = mobsMult;
+            _remoteBossesHpMult = bossesMult;
+            MultiplayerSettingsStorage.MobsHpMultiplier = mobsMult;
+            MultiplayerSettingsStorage.BossesHpMultiplier = bossesMult;
         }
 
         public static void ReceiveHeroSkin(string skin)

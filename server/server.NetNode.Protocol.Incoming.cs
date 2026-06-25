@@ -221,6 +221,14 @@ public sealed partial class NetNode
             return true;
         }
 
+        if (line.StartsWith("HPMULT|"))
+        {
+            var payload = line["HPMULT|".Length..];
+            lock (_sync) _hasRemote = true;
+            GameDataSync.ReceiveHpMultipliers(payload);
+            return true;
+        }
+
         if (line.StartsWith("LDESC|"))
         {
             var payload = line["LDESC|".Length..];

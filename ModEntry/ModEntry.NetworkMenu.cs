@@ -43,6 +43,7 @@ namespace DeadCellsMultiplayerMod
             ResetNetworkState();
             createHost();
             _netRole = NetRole.Host;
+            _net?.SendHpMultipliers();
             GameMenu.SetRole(_netRole);
             GameMenu.NetRef = _net;
             ConnectionUI.NotifyConnectionsChanged();
