@@ -24,8 +24,7 @@ one player hosts a server, another connects — and both players can **play thro
 - ✅ Ghost weapon, head, and cosmetic sync  
 - ✅ Death/revive handling and restart sync  
 - ✅ Level graph reload sync (boss cell doors, level transitions)  
-- ✅ Multiplayer save slots and continue support  
-- ✅ Custom mode and stream mode support  
+- ✅ Multiplayer save slots  
 
 ---
 
