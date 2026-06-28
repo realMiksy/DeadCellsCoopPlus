@@ -9,6 +9,7 @@ using HaxeProxy.Runtime;
 using ModCore.Events;
 using ModCore.Events.Interfaces.Game.Hero;
 using Serilog;
+using System.Diagnostics;
 using System.Reflection;
 
 namespace DeadCellsMultiplayerMod.Interaction;
@@ -25,6 +26,7 @@ public class InteractionSync :
         public readonly List<VineLadder> VineLadders = new();
         public readonly List<Teleport> Teleports = new();
         public readonly List<Portal> Portals = new();
+        public readonly List<Interactive> GenericInteractives = new();
         public readonly List<PressurePlate> PressurePlates = new();
         public readonly List<TreasureChest> TreasureChests = new();
         public readonly List<SwitchBossRune> SwitchBossRunes = new();
@@ -39,6 +41,7 @@ public class InteractionSync :
             VineLadders.Clear();
             Teleports.Clear();
             Portals.Clear();
+            GenericInteractives.Clear();
             PressurePlates.Clear();
             TreasureChests.Clear();
             SwitchBossRunes.Clear();
@@ -57,6 +60,7 @@ public class InteractionSync :
     private const double SwitchBossRunePosTolerance = 32.0;
     private const double ElevatorPosTolerance = 48.0;
     private const double PortalPosTolerance = 48.0;
+    private const double GenericInteractPosTolerance = 72.0;
     private const double TileSizePx = 24.0;
     private const double DoorProximityRadiusPx = 100.0;
     private static readonly double DoorProximityRadiusSq = DoorProximityRadiusPx * DoorProximityRadiusPx;
@@ -74,14 +78,18 @@ public class InteractionSync :
     private static Level? _cachedInteractionLevel;
     private bool _applyingRemoteDoorEvents;
     private bool _applyingRemoteChestEvents;
-    private bool _applyingRemotePressurePlateEvents;
     private bool _applyingRemoteVineLadderEvents;
     private bool _applyingRemoteTeleportEvents;
     private bool _applyingRemoteBreakableGroundEvents;
     private bool _applyingRemotePortalEvents;
+    private bool _applyingRemoteGenericActivateEvents;
     private bool _applyingRemoteElevatorEvents;
     /// <summary>Throttle elevator INTERELEV sends — onStep can fire every frame while riding.</summary>
     private readonly Dictionary<Elevator, long> _elevatorLastInterSendTickMs = new();
+    private readonly Dictionary<string, long> _recentLocalInteractionSends = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _recentRemoteInteractionApplies = new(StringComparer.Ordinal);
+    private const double OneShotInteractionSendDedupeSeconds = 0.75;
+    private const double OneShotInteractionApplyDedupeSeconds = 2.0;
 
     public InteractionSync(ModEntry entry)
     {
@@ -106,12 +114,23 @@ public class InteractionSync :
         Hook_Teleport.open += Hook_Teleport_open;
         Hook_Portal.show += Hook_Portal_show;
         Hook_Portal.close += Hook_Portal_close;
+        // v5.1: Do not hook Hook_Interactive.onActivate directly.
+        // Some DCCM/GameProxy builds expose Hook_Interactive without orig_onActivate,
+        // which caused CS0426: type name orig_onActivate does not exist.
+        // Specific interaction replay hooks and F8 stuck recovery remain enabled.
         Hook_Hero.breakBreakableGround += Hook_Hero_breakBreakableGround;
         Hook_SwitchBossRune.canBeActivated += Hook_SwitchBossRune_canBeActivated;
         Hook_SwitchBossRune.close += Hook_SwitchBossRune_close;
         Hook_SwitchBossRune.updateCells += Hook_SwitchBossRune_updateCells;
     }
 
+
+    // v5.1 compile-fix note:
+    // The generic Interactive.onActivate hook was intentionally removed because the generated
+    // hook delegate name is not stable across the current DCCM/GameProxy builds. The v5 code
+    // referenced Hook_Interactive.orig_onActivate, but your build exposes Hook_Interactive
+    // without that nested type. This keeps the stable/specific interaction sync hooks active
+    // while avoiding a compile break.
 
     private bool Hook_SwitchBossRune_canBeActivated(Hook_SwitchBossRune.orig_canBeActivated orig, SwitchBossRune self, Hero by)
     {
@@ -153,6 +172,7 @@ public class InteractionSync :
                 var (x, y) = GetEntityPixelPos(self);
                 for (var i = 0; i < count; i++)
                     net.SendInterBossRuneUpdateCells(x, y, add);
+                QueueReliableInteractionReplay("bossrune", x, y, string.Empty, add);
             }
         }
         catch (Exception ex)
@@ -173,6 +193,7 @@ public class InteractionSync :
         {
             var (x, y) = GetEntityPixelPos(self);
             net.SendInterBossRuneUpdateCells(x, y, add);
+            QueueReliableInteractionReplay("bossrune", x, y, string.Empty, add);
             var user = self?._level?.game?.user ?? dc.Main.Class.ME?.user;
             if (user != null)
                 GameDataSync.SendBossRune(user, net);
@@ -223,6 +244,9 @@ public class InteractionSync :
 
     private void TrySendDoorEvent(Door self, string action)
     {
+        if (string.Equals(action, "close", StringComparison.OrdinalIgnoreCase))
+            return; // v5.6: never network-close doors; this fought pressure plates and caused flicker/stuck closed doors.
+
         if (_applyingRemoteDoorEvents)
             return;
         var net = GameMenu.NetRef;
@@ -232,6 +256,8 @@ public class InteractionSync :
         {
             var (x, y) = GetEntityPixelPos(self);
             var broken = action == "die" || SafeRead(() => self.broken, false);
+            if (!ShouldSendOneShotInteraction("door", x, y, action))
+                return;
             net!.SendInterDoor(net.id, x, y, action, broken);
         }
         catch (Exception ex)
@@ -255,6 +281,8 @@ public class InteractionSync :
             _elevatorLastInterSendTickMs[self] = now;
 
             var (x, y) = GetElevatorStableAnchor(self);
+            if (!ShouldSendOneShotInteraction("elevator", x, y, string.Empty))
+                return;
             GameMenu.NetRef!.SendInterElevator(x, y);
         }
         catch (Exception ex)
@@ -294,9 +322,9 @@ public class InteractionSync :
 
     private void TrySendPressurePlateEvent(PressurePlate self)
     {
-        if (_applyingRemotePressurePlateEvents)
-            return;
-        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterPressurePlate(x, y), "PressurePlate");
+        // v5.6: pressure plates are stateful/toggle-like. Network replay/echo made them
+        // repeatedly open/close doors, so leave pressure plates to local vanilla simulation.
+        return;
     }
 
     private void Hook_TreasureChest_open(Hook_TreasureChest.orig_open orig, TreasureChest self, Hero by)
@@ -308,7 +336,10 @@ public class InteractionSync :
 
     private void TrySendTreasureChestEvent(TreasureChest self)
     {
-        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterTreasureChest(x, y), "TreasureChest");
+        TrySendInteractEvent(self, (x, y) =>
+        {
+            GameMenu.NetRef!.SendInterTreasureChest(x, y);
+        }, "TreasureChest", "chest", string.Empty);
     }
 
     private void Hook_VineLadder_activate(Hook_VineLadder.orig_activate orig, VineLadder self)
@@ -321,12 +352,16 @@ public class InteractionSync :
     {
         if (_applyingRemoteVineLadderEvents)
             return;
-        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterVineLadder(x, y), "VineLadder");
+        TrySendInteractEvent(self, (x, y) =>
+        {
+            GameMenu.NetRef!.SendInterVineLadder(x, y);
+        }, "VineLadder", "vine", string.Empty);
     }
 
     private void Hook_Teleport_open(Hook_Teleport.orig_open orig, Teleport self)
     {
         orig(self);
+        TryRememberLocalTeleporterReviveAnchor(self);
         TrySendTeleportEvent(self);
     }
 
@@ -340,6 +375,8 @@ public class InteractionSync :
             return;
         try
         {
+            if (!ShouldSendOneShotInteraction("break", x, y, string.Empty))
+                return;
             net!.SendInterBreakableGround(x, y);
         }
         catch (Exception ex)
@@ -348,11 +385,54 @@ public class InteractionSync :
         }
     }
 
+    private void TryRememberLocalTeleporterReviveAnchor(Teleport self)
+    {
+        if (_applyingRemoteTeleportEvents || self == null)
+            return;
+
+        var hero = ModEntry.me;
+        if (hero == null)
+            return;
+
+        try
+        {
+            if (hero._level == null || self._level == null || !ReferenceEquals(hero._level, self._level))
+                return;
+        }
+        catch
+        {
+            return;
+        }
+
+        var (x, y) = GetEntityPixelPos(self);
+        if (!double.IsFinite(x) || !double.IsFinite(y) || (x == 0 && y == 0))
+            return;
+
+        try
+        {
+            var hx = hero.spr?.x ?? ((hero.cx + hero.xr) * TileSizePx);
+            var hy = hero.spr?.y ?? ((hero.cy + hero.yr) * TileSizePx);
+            var dx = hx - x;
+            var dy = hy - y;
+            if (dx * dx + dy * dy > 220.0 * 220.0)
+                return;
+        }
+        catch
+        {
+            return;
+        }
+
+        try { ModEntry.Instance?.RememberLocalReviveTeleporterPosition(x, y); } catch { }
+    }
+
     private void TrySendTeleportEvent(Teleport self)
     {
         if (_applyingRemoteTeleportEvents)
             return;
-        TrySendInteractEvent(self, (x, y) => GameMenu.NetRef!.SendInterTeleport(x, y), "Teleport");
+        TrySendInteractEvent(self, (x, y) =>
+        {
+            GameMenu.NetRef!.SendInterTeleport(x, y);
+        }, "Teleport", "teleport", string.Empty);
     }
 
     private void Hook_Portal_show(Hook_Portal.orig_show orig, Portal self)
@@ -376,11 +456,69 @@ public class InteractionSync :
         try
         {
             var (x, y) = GetEntityPixelPos(self);
+            if (!ShouldSendOneShotInteraction("portal", x, y, action))
+                return;
             GameMenu.NetRef!.SendInterPortal(x, y, action);
         }
         catch (Exception ex)
         {
             _log.Warning(ex, "[InteractionSync] Portal send failed action={Action}", action);
+        }
+    }
+
+    private static bool ShouldSyncGenericInteractive(Interactive? interactive, Hero? by)
+    {
+        if (interactive == null || by == null || ModEntry.me == null || !ReferenceEquals(by, ModEntry.me))
+            return false;
+        if (!ShouldAllowGenericInteractiveApply(interactive))
+            return false;
+
+        return true;
+    }
+
+    private static bool ShouldAllowGenericInteractiveApply(Interactive? interactive)
+    {
+        if (interactive == null)
+            return false;
+
+        if (interactive is Door || interactive is Exit || interactive is Portal ||
+            interactive is TreasureChest || interactive is VineLadder || interactive is Teleport || interactive is SwitchBossRune)
+        {
+            return false;
+        }
+
+        try
+        {
+            var typeName = interactive.GetType().Name ?? string.Empty;
+            if (typeName.IndexOf("ZDoor", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                typeName.IndexOf("BossRushDoor", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+        }
+        catch
+        {
+        }
+
+        if (SafeRead(() => interactive.destroyed, false))
+            return false;
+        if (SafeRead(() => interactive.isOutOfGame, false))
+            return false;
+
+        return true;
+    }
+
+    private static string GetStableInteractiveTypeName(Interactive? interactive)
+    {
+        if (interactive == null)
+            return string.Empty;
+        try
+        {
+            return interactive.GetType().Name ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 
@@ -407,13 +545,19 @@ public class InteractionSync :
     private static bool IsNetReadyForSend(NetNode? net) =>
         net != null && net.IsAlive && net.id > 0;
 
-    private bool TrySendInteractEvent(Entity entity, Action<double, double> send, string logContext)
+    private bool TrySendInteractEvent(Entity entity, Action<double, double> send, string logContext, string? dedupeKind = null, string? dedupeAction = null)
     {
         if (!IsNetReadyForSend(GameMenu.NetRef))
             return false;
         try
         {
             var (x, y) = GetEntityPixelPos(entity);
+            if (!string.IsNullOrWhiteSpace(dedupeKind) &&
+                !ShouldSendOneShotInteraction(dedupeKind!, x, y, dedupeAction ?? string.Empty))
+            {
+                return false;
+            }
+
             send(x, y);
             return true;
         }
@@ -424,11 +568,63 @@ public class InteractionSync :
         }
     }
 
+    private bool ShouldSendOneShotInteraction(string kind, double x, double y, string action)
+    {
+        return ShouldAllowOneShot(_recentLocalInteractionSends, kind, x, y, action, OneShotInteractionSendDedupeSeconds);
+    }
+
+    private bool ShouldApplyOneShotInteraction(string kind, double x, double y, string action)
+    {
+        return ShouldAllowOneShot(_recentRemoteInteractionApplies, kind, x, y, action, OneShotInteractionApplyDedupeSeconds);
+    }
+
+    private static bool ShouldAllowOneShot(Dictionary<string, long> map, string kind, double x, double y, string action, double seconds)
+    {
+        var now = StopwatchTicks();
+        if (map.Count > 256)
+            PruneOneShotMap(map, now);
+
+        var key = MakeInteractionKey(kind, x, y, action);
+        if (map.TryGetValue(key, out var last) &&
+            now - last < (long)(System.Diagnostics.Stopwatch.Frequency * seconds))
+        {
+            return false;
+        }
+
+        map[key] = now;
+        return true;
+    }
+
+    private static long StopwatchTicks() => System.Diagnostics.Stopwatch.GetTimestamp();
+
+    private static void PruneOneShotMap(Dictionary<string, long> map, long now)
+    {
+        var cutoff = now - (long)(System.Diagnostics.Stopwatch.Frequency * 8.0);
+        var stale = new List<string>();
+        foreach (var kv in map)
+        {
+            if (kv.Value < cutoff)
+                stale.Add(kv.Key);
+        }
+
+        for (var i = 0; i < stale.Count; i++)
+            map.Remove(stale[i]);
+    }
+
+    private static string MakeInteractionKey(string kind, double x, double y, string action)
+    {
+        var qx = (int)System.Math.Round(x / 8.0);
+        var qy = (int)System.Math.Round(y / 8.0);
+        return string.Concat(kind, ":", action ?? string.Empty, ":", qx.ToString(System.Globalization.CultureInfo.InvariantCulture), ":", qy.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     void IOnHeroUpdate.OnHeroUpdate(double dt)
     {
         var net = GameMenu.NetRef;
         if (net == null || !net.IsAlive)
             return;
+
+        // v5.6: reliable replay disabled; it could repeatedly toggle stateful DLC doors/vines/plates.
 
         if (net.TryConsumeInterDoorEvents(out var doorEvents))
         {
@@ -465,8 +661,12 @@ public class InteractionSync :
             ApplyRemotePortalEvents(portalEvents);
         }
 
-        if (net.IsHost)
-            CheckAndCloseDoorsWhenNoOneNearby();
+        if (net.TryConsumeInterGenericActivateEvents(out var genericEvents))
+        {
+            ApplyRemoteGenericActivateEvents(genericEvents);
+        }
+
+        // v5.6: do not run custom auto-close; it can fight pressure plates/DLC doors.
         if (net.TryConsumeInterBreakableGroundEvents(out var breakableGroundEvents))
         {
             ApplyRemoteBreakableGroundEvents(breakableGroundEvents);
@@ -476,6 +676,13 @@ public class InteractionSync :
         {
             ApplyRemoteBossRuneUpdateCells(updateCellsEvents);
         }
+    }
+
+    private void QueueReliableInteractionReplay(string kind, double x, double y, string action, bool flag)
+    {
+        // v5.6 rollback: do not replay stateful interactions. Replaying open/trigger/activate
+        // packets every few frames caused doors, pressure plates and vines to flicker/toggle.
+        // Keep this method as a no-op so all call sites remain harmless and compile-safe.
     }
 
     private void CheckAndCloseDoorsWhenNoOneNearby()
@@ -633,6 +840,9 @@ public class InteractionSync :
                 if (door == null)
                     continue;
 
+                if (!ShouldApplyOneShotInteraction("door", ev.X, ev.Y, ev.Action))
+                    continue;
+
                 try
                 {
                     switch (ev.Action)
@@ -641,18 +851,7 @@ public class InteractionSync :
                             door.open(300, null, null);
                             break;
                         case "close":
-                            if (SafeRead(() => door.broken, false))
-                                break;
-                            _openedDoors.Remove(door);
-                            try
-                            {
-                                int delayMs = DoorCloseDelayMs;
-                                door.close(Ref<int>.From(ref delayMs));
-                            }
-                            catch (Exception ex)
-                            {
-                                _log.Warning(ex, "[InteractionSync] close failed (door may be broken)");
-                            }
+                            // v5.6: ignore remote close events. Local vanilla logic/plates should own close state.
                             break;
                         case "damage":
                             if (ev.Broken)
@@ -716,7 +915,7 @@ public class InteractionSync :
     private void ApplyRemoteVineLadderEvents(List<InterVineLadderEvent> events)
     {
         var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null || events.Count == 0)
+        if (level == null || events == null || events.Count == 0)
             return;
 
         _applyingRemoteVineLadderEvents = true;
@@ -724,13 +923,16 @@ public class InteractionSync :
         {
             foreach (var ev in events)
             {
-                var vineLadder = FindVineLadderByPos(level, ev.X, ev.Y);
-                if (vineLadder == null)
+                if (!ShouldApplyOneShotInteraction("vine", ev.X, ev.Y, string.Empty))
+                    continue;
+
+                var vine = FindVineLadderByPos(level, ev.X, ev.Y);
+                if (vine == null)
                     continue;
 
                 try
                 {
-                    vineLadder.activate();
+                    vine.activate();
                 }
                 catch (Exception ex)
                 {
@@ -755,6 +957,9 @@ public class InteractionSync :
         {
             foreach (var ev in events)
             {
+                if (!ShouldApplyOneShotInteraction("portal", ev.X, ev.Y, ev.Action))
+                    continue;
+
                 var portal = FindPortalByPos(level, ev.X, ev.Y);
                 if (portal == null)
                     continue;
@@ -778,6 +983,44 @@ public class InteractionSync :
         }
     }
 
+    private void ApplyRemoteGenericActivateEvents(List<InterGenericActivateEvent> events)
+    {
+        var level = ModEntry.me?._level;
+        var localHero = ModEntry.me;
+        if (level == null || localHero == null || events == null || events.Count == 0)
+            return;
+
+        _applyingRemoteGenericActivateEvents = true;
+        try
+        {
+            foreach (var ev in events)
+            {
+                if (!ShouldApplyOneShotInteraction("generic", ev.X, ev.Y, ev.TypeName))
+                    continue;
+
+                var target = FindGenericInteractiveByPos(level, ev.X, ev.Y, ev.TypeName);
+                if (target == null)
+                {
+                    _log.Warning("[InteractionSync] No generic interactive found type={Type} x={X} y={Y}", ev.TypeName, ev.X, ev.Y);
+                    continue;
+                }
+
+                try
+                {
+                    target.onActivate(localHero, false);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "[InteractionSync] Apply generic interactive failed type={Type} x={X} y={Y}", ev.TypeName, ev.X, ev.Y);
+                }
+            }
+        }
+        finally
+        {
+            _applyingRemoteGenericActivateEvents = false;
+        }
+    }
+
     private void ApplyRemoteTeleportEvents(List<InterTeleportEvent> events)
     {
         var level = ModEntry.me?._level;
@@ -789,6 +1032,9 @@ public class InteractionSync :
         {
             foreach (var ev in events)
             {
+                if (!ShouldApplyOneShotInteraction("teleport", ev.X, ev.Y, string.Empty))
+                    continue;
+
                 var teleport = FindTeleportByPos(level, ev.X, ev.Y);
                 if (teleport == null)
                 {
@@ -835,6 +1081,8 @@ public class InteractionSync :
                 }
                 if (alreadyNearby)
                     continue;
+                if (!ShouldApplyOneShotInteraction("break", ev.X, ev.Y, string.Empty))
+                    continue;
 
                 var cx = (int)System.Math.Round(ev.X);
                 var cy = (int)System.Math.Round(ev.Y);
@@ -858,37 +1106,8 @@ public class InteractionSync :
 
     private void ApplyRemotePressurePlateEvents(List<InterPressurePlateEvent> events)
     {
-        var level = ModEntry.me?._level;
-        if (level?.entities == null || events == null || events.Count == 0)
-            return;
-
-        var localHero = ModEntry.me as Entity;
-        if (localHero == null)
-            return;
-
-        _applyingRemotePressurePlateEvents = true;
-        try
-        {
-            foreach (var ev in events)
-            {
-                var plate = FindPressurePlateByPos(level, ev.X, ev.Y);
-                if (plate == null)
-                    continue;
-
-                try
-                {
-                    plate.trigger(localHero);
-                }
-                catch (Exception ex)
-                {
-                    _log.Warning(ex, "[InteractionSync] Apply pressure plate event failed x={X} y={Y}", ev.X, ev.Y);
-                }
-            }
-        }
-        finally
-        {
-            _applyingRemotePressurePlateEvents = false;
-        }
+        // v5.6: ignore remote pressure plate events to prevent plate/door toggle loops.
+        return;
     }
 
     private static Door? FindDoorByPos(Level level, double x, double y)
@@ -1090,6 +1309,55 @@ public class InteractionSync :
         return FindInteractByPos<VineLadder>(level, x, y, PlatePosTolerance);
     }
 
+    private static Interactive? FindGenericInteractiveByPos(Level level, double x, double y, string typeName)
+    {
+        var candidates = GetInteractionCandidates<Interactive>(level);
+        if (candidates == null || candidates.Count == 0)
+            return null;
+
+        Interactive? nearestSameType = null;
+        Interactive? nearestAnyType = null;
+        var nearestSameTypeSq = GenericInteractPosTolerance * GenericInteractPosTolerance;
+        var nearestAnyTypeSq = GenericInteractPosTolerance * GenericInteractPosTolerance;
+        var wanted = string.IsNullOrWhiteSpace(typeName) ? string.Empty : typeName.Trim();
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var e = candidates[i];
+            if (e?.spr == null || !ShouldAllowGenericInteractiveApply(e))
+                continue;
+
+            try
+            {
+                var dx = e.spr.x - x;
+                var dy = e.spr.y - y;
+                var dSq = dx * dx + dy * dy;
+                if (dSq < nearestAnyTypeSq)
+                {
+                    nearestAnyTypeSq = dSq;
+                    nearestAnyType = e;
+                }
+
+                if (!string.IsNullOrWhiteSpace(wanted) &&
+                    !string.Equals(GetStableInteractiveTypeName(e), wanted, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (dSq < nearestSameTypeSq)
+                {
+                    nearestSameTypeSq = dSq;
+                    nearestSameType = e;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return nearestSameType ?? nearestAnyType;
+    }
+
     private Teleport? FindTeleportByPos(Level level, double x, double y)
     {
         var byPos = FindInteractByPos<Teleport>(level, x, y, TeleportPosTolerance);
@@ -1138,6 +1406,9 @@ public class InteractionSync :
         {
             foreach (var ev in events)
             {
+                if (!ShouldApplyOneShotInteraction("chest", ev.X, ev.Y, string.Empty))
+                    continue;
+
                 var chest = FindTreasureChestByPos(level, ev.X, ev.Y);
                 if (chest == null)
                     continue;
@@ -1173,6 +1444,12 @@ public class InteractionSync :
     {
         var candidates = GetInteractionCandidates<T>(level);
         if (candidates == null || candidates.Count == 0)
+        {
+            RebuildInteractionCache(level);
+            candidates = GetInteractionCandidates<T>(level);
+        }
+
+        if (candidates == null || candidates.Count == 0)
             return null;
 
         for (var i = 0; i < candidates.Count; i++)
@@ -1192,6 +1469,32 @@ public class InteractionSync :
             catch
             {
                 // ignore
+            }
+        }
+
+        // Level interaction entities can appear after our first cache pass (DLC doors, vines,
+        // teleports). Refresh once before giving up so one-shot visual sync is less likely to miss.
+        RebuildInteractionCache(level);
+        candidates = GetInteractionCandidates<T>(level);
+        if (candidates != null && candidates.Count > 0)
+        {
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                var e = candidates[i];
+                if (e == null)
+                    continue;
+                try
+                {
+                    if (e.spr != null &&
+                        System.Math.Abs(e.spr.x - x) < tolerance &&
+                        System.Math.Abs(e.spr.y - y) < tolerance)
+                    {
+                        return e;
+                    }
+                }
+                catch
+                {
+                }
             }
         }
 
@@ -1245,6 +1548,9 @@ public class InteractionSync :
                     case SwitchBossRune switchBossRune:
                         CachedInteractionLevelData.SwitchBossRunes.Add(switchBossRune);
                         break;
+                    case Interactive interactive when ShouldAllowGenericInteractiveApply(interactive):
+                        CachedInteractionLevelData.GenericInteractives.Add(interactive);
+                        break;
                 }
             }
         }
@@ -1281,6 +1587,8 @@ public class InteractionSync :
             return (IReadOnlyList<T>)(object)cache.Teleports;
         if (typeof(T) == typeof(Portal))
             return (IReadOnlyList<T>)(object)cache.Portals;
+        if (typeof(T) == typeof(Interactive))
+            return (IReadOnlyList<T>)(object)cache.GenericInteractives;
         if (typeof(T) == typeof(PressurePlate))
             return (IReadOnlyList<T>)(object)cache.PressurePlates;
         if (typeof(T) == typeof(TreasureChest))

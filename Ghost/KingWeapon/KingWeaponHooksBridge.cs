@@ -64,6 +64,8 @@ public partial class ModEntry
 
     internal void NotifyLocalWeaponPrepareFromKingWeaponHooks(Weapon self)
     {
+        if (RemoteWeaponVisualSyncDisabled())
+            return;
         if(_netRole == NetRole.None || self == null || me == null)
             return;
 
@@ -105,6 +107,8 @@ public partial class ModEntry
 
     internal void NotifyLocalShieldHoldingPulseFromKingWeaponHooks(BaseShield self, double ratio)
     {
+        if (RemoteWeaponVisualSyncDisabled())
+            return;
         if(_netRole == NetRole.None || self == null || me == null)
             return;
 
@@ -133,6 +137,8 @@ public partial class ModEntry
 
     internal void NotifyLocalWeaponInterruptFromKingWeaponHooks(Weapon self)
     {
+        if (RemoteWeaponVisualSyncDisabled())
+            return;
         if(_netRole == NetRole.None || self == null || me == null)
             return;
 
@@ -174,6 +180,8 @@ public partial class ModEntry
 
     internal void NotifyLocalAmmoChangedFromKingWeaponHooks(InventItem? item)
     {
+        if (RemoteWeaponVisualSyncDisabled())
+            return;
         if(_netRole == NetRole.None || item == null || me == null)
             return;
 

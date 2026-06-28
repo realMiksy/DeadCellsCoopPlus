@@ -389,10 +389,16 @@ public sealed partial class NetNode
             return false;
 
         var generation = 0;
-        if (parts.Length > 4)
-            int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out generation);
+        var typeIndex = 4;
+        if (parts.Length > 4 &&
+            int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedGeneration))
+        {
+            generation = parsedGeneration;
+            typeIndex = 5;
+        }
 
-        die = new MobDie(parsedUserId, mobIndex, x, y, generation);
+        var type = parts.Length > typeIndex ? parts[typeIndex] : string.Empty;
+        die = new MobDie(parsedUserId, mobIndex, x, y, type, generation);
         return true;
     }
 
@@ -895,6 +901,26 @@ public sealed partial class NetNode
         return true;
     }
 
+    private static bool TryParseInterGenericActivatePayload(string payload, out InterGenericActivateEvent ev)
+    {
+        ev = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 2)
+            return false;
+
+        if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+
+        var typeName = parts.Length >= 3 ? parts[2].Trim() : string.Empty;
+        ev = new InterGenericActivateEvent(x, y, typeName);
+        return true;
+    }
+
     private static bool TryParseInterBreakableGroundPayload(string payload, out InterBreakableGroundEvent ev)
     {
         ev = default;
@@ -934,6 +960,34 @@ public sealed partial class NetNode
             return false;
 
         ev = new InterPortalEvent(x, y, action);
+        return true;
+    }
+
+    private static bool TryParseWorldObjectStatePayload(string payload, out WorldObjectState state)
+    {
+        state = default;
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        var parts = payload.Split('|');
+        if (parts.Length < 5)
+            return false;
+
+        var levelId = (parts[0] ?? string.Empty).Trim();
+        var typeName = (parts[1] ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(levelId) || string.IsNullOrWhiteSpace(typeName))
+            return false;
+
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+            return false;
+        if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            return false;
+        if (!int.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var flags))
+            return false;
+        if (flags <= 0)
+            return false;
+
+        state = new WorldObjectState(levelId, typeName, x, y, flags);
         return true;
     }
 

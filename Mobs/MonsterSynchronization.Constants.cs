@@ -12,8 +12,15 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         private const double HostMobStateMidPositionEpsilon = 1.20;
         private const double HostMobStateDormantPositionEpsilon = 6.00;
         private const double MobFallbackMinimumScoreGap = 4.0;
+        private const double MobDieFallbackMaxDistancePx = 192.0;
+        private const double MobDieFallbackExtendedMaxDistancePx = 384.0;
+        private const double MobDieUntypedFallbackMaxDistancePx = 48.0;
+        private const double MobDieUntypedFallbackExtendedMaxDistancePx = 96.0;
+        private const double MobHitTypedRebindMaxDistancePx = 256.0;
+        private const double MobStateTypedRebindMaxDistancePx = 384.0;
         private const double ClientAiAuthorityLockDurationSeconds = 99999.0;
         private const double AuthoritativeAffectPresenceSeconds = 99999.0;
+        private const double HostFullMobResyncIntervalSeconds = 2.5;
         private const double PixelsPerCase = 24.0;
         private const double ClientNetworkAttackMinActiveFrames = 20.0;
         private const string ContactAttackPacketSkillId = "@contact";

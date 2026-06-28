@@ -39,6 +39,7 @@ namespace DeadCellsMultiplayerMod
 
         private void StartHostCore(Action createHost)
         {
+            s_isDisposing = false;
             _net?.Dispose();
             ResetNetworkState();
             createHost();
@@ -59,6 +60,7 @@ namespace DeadCellsMultiplayerMod
 
         private void StartClientCore(Action createClient)
         {
+            s_isDisposing = false;
             _net?.Dispose();
             var main = dc.Main.Class.ME;
             if (main?.user != null)
@@ -101,6 +103,7 @@ namespace DeadCellsMultiplayerMod
 
         public void StopNetworkFromMenu()
         {
+            StopSteamCallbackPumpTimer();
             var roleBeforeStop = _netRole;
             if (roleBeforeStop == NetRole.Client)
             {

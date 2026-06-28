@@ -1003,6 +1003,20 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return unresolvedMob;
             }
 
+            if (TryResolveNearestTypedMobLocked(
+                    state.Index,
+                    state.Type,
+                    state.X,
+                    state.Y,
+                    MobStateTypedRebindMaxDistancePx,
+                    reservedMobs,
+                    out var nearestTypedStateMob) && nearestTypedStateMob != null)
+            {
+                TryRebindTrackedMobSyncIdLocked(nearestTypedStateMob, state.Index);
+                MobSyncTrace.LogBindSyncId("state_nearest_typed", state.Index, state.Type ?? string.Empty, state.X, state.Y);
+                return nearestTypedStateMob;
+            }
+
             if (candidateCount > 1)
             {
                 MobSyncTrace.LogAmbiguousMatchRejected(
@@ -1154,6 +1168,21 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (string.IsNullOrWhiteSpace(expectedType))
                 return null;
+
+            if (TryResolveNearestTypedMobLocked(
+                    attack.Index,
+                    expectedType,
+                    attack.X,
+                    attack.Y,
+                    MobHitTypedRebindMaxDistancePx,
+                    null,
+                    out var nearestTypedAttackMob) && nearestTypedAttackMob != null)
+            {
+                TryRebindTrackedMobSyncIdLocked(nearestTypedAttackMob, attack.Index);
+                hostMobTypeBySyncId[attack.Index] = expectedType;
+                MobSyncTrace.LogBindSyncId("attack_nearest_typed", attack.Index, expectedType ?? string.Empty, attack.X, attack.Y);
+                return nearestTypedAttackMob;
+            }
 
             if (!string.IsNullOrWhiteSpace(attack.Type))
                 hostMobTypeBySyncId[attack.Index] = attack.Type;

@@ -48,41 +48,31 @@ namespace DeadCellsMultiplayerMod
             TryApplyDebugExplorerRune(hero);
         }
 
+        private static bool s_debugStartPerkDisabledNoticeLogged;
+
         private void TryApplyDebugStartPerk(Hero hero)
         {
-            if (hero == null)
-                return;
+            // Stability v5.5: disable the optional debug start-perk injection completely.
+            //
+            // The uploaded crash logs show repeated Hashlink crashes from
+            // new InventItem(new InventItemKind.Perk("P_Necromancy")) while Dead Cells is
+            // still initializing / while combat is running. Even when caught in C#, that
+            // Hashlink exception can poison the HL runtime and later crash the run with
+            // Null access .commonProps. This feature is only a debug convenience, so the
+            // safest multiplayer behavior is to never create InventItem perks from the
+            // mod at runtime. Runes/minimap debug options are left intact below.
+            _debugPerkAppliedHero = null;
+            _debugPerkAppliedId = string.Empty;
+            _nextDebugPerkApplyTick = 0;
 
             var configuredPerkId = MultiplayerSettingsStorage.DebugStartPerkId;
-            if (string.IsNullOrWhiteSpace(configuredPerkId) ||
-                string.Equals(configuredPerkId, MultiplayerSettingsStorage.NoStartPerkValue, StringComparison.OrdinalIgnoreCase))
+            if (!s_debugStartPerkDisabledNoticeLogged &&
+                !string.IsNullOrWhiteSpace(configuredPerkId) &&
+                !string.Equals(configuredPerkId, MultiplayerSettingsStorage.NoStartPerkValue, StringComparison.OrdinalIgnoreCase))
             {
-                _debugPerkAppliedHero = null;
-                _debugPerkAppliedId = string.Empty;
-                _nextDebugPerkApplyTick = 0;
-                return;
+                s_debugStartPerkDisabledNoticeLogged = true;
+                Logger.Warning("[NetMod][Stability] Debug start perk {PerkId} is disabled in v5.5 to prevent InventItem.commonProps crashes.", configuredPerkId.Trim());
             }
-
-            var perkId = configuredPerkId.Trim();
-            if (ReferenceEquals(_debugPerkAppliedHero, hero) &&
-                string.Equals(_debugPerkAppliedId, perkId, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            var now = Stopwatch.GetTimestamp();
-            if (_nextDebugPerkApplyTick != 0 && now < _nextDebugPerkApplyTick)
-                return;
-
-            var item = new InventItem(new InventItemKind.Perk(perkId.AsHaxeString()));
-            hero.applyItemPickEffect(hero, item);
-
-            if (string.Equals(perkId, "P_Yolo", StringComparison.OrdinalIgnoreCase))
-                hero.tryToApplyYoloPerk();
-
-            _debugPerkAppliedHero = hero;
-            _debugPerkAppliedId = perkId;
-            _nextDebugPerkApplyTick = 0;
         }
 
         private void TryApplyDebugExplorerRune(Hero hero)

@@ -371,6 +371,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     RuntimeHitchWatch.LogSlow(modEntry.Logger, "MobsSynchronization.HostConsume", consumeMs, BuildRuntimeQueueDetails());
 
                 var flushStart = RuntimeHitchWatch.Start();
+                QueueHostFullMobResyncIfDue(net);
                 FlushHostDirtyMobQueue(net);
                 var flushMs = RuntimeHitchWatch.GetElapsedMilliseconds(flushStart);
                 if (flushMs >= RuntimeHitchWatch.MobSyncFlushSlowThresholdMs)
@@ -932,6 +933,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 orig(self);
                 if (IsClient(net) && IsSyncMob(self))
                 {
+                    TryFinalizeNonBossZeroLifeMob(self, "client_post_update_zero_hp");
+                    try { if (self.destroyed) return; } catch { return; }
                     ObserveClientMobForDirtyQueue(self);
                     ApplyClientAnimationStateBeforeUpdate(self);
                     TryRepairClientMobAttackTarget(self);
@@ -943,6 +946,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             orig(self);
             if (IsSyncMob(self))
             {
+                TryFinalizeNonBossZeroLifeMob(self, "host_post_update_zero_hp");
+                try { if (self.destroyed) return; } catch { return; }
                 ObserveHostMobForDirtyQueue(self);
                 TryAssignHostAttackTarget(self);
             }
@@ -967,9 +972,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 dieNet = GameMenu.NetRef;
                 isClient = IsClient(dieNet);
 
-                // Client is not authoritative for mob death; wait for host die/hit confirmation.
+                // Client is not authoritative for mob death, but it must still send a reliable
+                // kill request. Otherwise the client's local mob can sit at an empty HP bar until
+                // the host also hits it. The host validates sync id + type + position before applying.
                 if (isClient && IsSyncMob(self))
                 {
+                    TrySendClientMobKillRequest(self, dieNet);
                     try
                     {
                         if (self.life <= 0)
@@ -1004,7 +1012,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 if (TryGetCurrentLevelIdentityToken(out var identityToken))
                 {
-                    var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, SingleEvent("die"), generation: identityToken);
+                    var dieType = BuildMobStateTypeSignature(self);
+                    var update = new NetNode.MobEventUpdate(dieSyncId, dieX, dieY, 0, SingleEvent("die"), dieType, identityToken);
                     MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(dieNet), SingleUpdate(update));
                     dieNet.SendMobEvents(SingleUpdate(update));
                 }
@@ -1013,6 +1022,29 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             lock (Sync)
             {
                 RemoveTrackedMobLocked(self);
+            }
+        }
+
+        private static void TrySendClientMobKillRequest(Mob self, NetNode? net)
+        {
+            if (self == null || net == null || !net.IsAlive || !IsClient(net))
+                return;
+            if (!IsSyncMob(self))
+                return;
+            if (!TryGetMobSyncId(self, out var syncId) || syncId < 0)
+                return;
+
+            try
+            {
+                var x = GetSyncX(self);
+                var y = GetSyncY(self);
+                var type = BuildMobStateTypeSignature(self);
+                var generation = TryGetCurrentLevelIdentityToken(out var token) ? token : 0;
+                net.SendMobDie(syncId, x, y, type, generation);
+                clientLastReportedMobLife[self] = 0;
+            }
+            catch
+            {
             }
         }
 
@@ -1048,6 +1080,25 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             }
         }
 
+        private static bool IsRecoverableMobDamageCrash(Exception ex)
+        {
+            if (ex == null)
+                return false;
+
+            var text = ex.ToString() ?? string.Empty;
+            if (!text.Contains("Null access", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return text.Contains("Mob.onDamage", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Mob.applyAttackResult", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("AttackUtils.hit", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("AttackTargetImpl.applyHit", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("DiveAttack.onOwnerLand", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Null access .commonProps", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Null access .cx", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Null access .lockAiS", StringComparison.OrdinalIgnoreCase);
+        }
+
         private void Hook_Mob_onDamage(Hook_Mob.orig_onDamage orig, Mob self, AttackData i)
         {
             var preDamageLife = GetMobLifeOrFallback(self, 0);
@@ -1060,7 +1111,33 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 preSyncOk = TryGetMobSyncId(self, out cachedMobSyncId);
             }
 
-            orig(self, i);
+            try
+            {
+                orig(self, i);
+            }
+            catch (Exception ex) when (IsRecoverableMobDamageCrash(ex))
+            {
+                // If vanilla Dead Cells tries to damage a half-disposed/desynced mob, keep
+                // the multiplayer run alive. This can happen after a stale sync id or DLC
+                // room transition leaves an invalid mob in the hit list.
+                Log.Warning(ex, "[MobSync] Suppressed recoverable Mob.onDamage crash and removed mob from sync tracking");
+                try
+                {
+                    if (self != null)
+                    {
+                        lock (Sync)
+                        {
+                            RemoveTrackedMobLocked(self);
+                        }
+
+                        try { self._targetable = false; } catch { }
+                    }
+                }
+                catch
+                {
+                }
+                return;
+            }
 
             try
             {

@@ -359,6 +359,8 @@ public sealed partial class NetNode : IDisposable
         public readonly int Generation;
         public readonly double X;
         public readonly double Y;
+        /// <summary>Optional mob type signature. v6.2 uses this to avoid killing/rebinding the wrong mob after sync-id drift.</summary>
+        public readonly string Type;
 
         public MobDie(int userId, int mobIndex, double x, double y, int generation = 0)
         {
@@ -367,6 +369,17 @@ public sealed partial class NetNode : IDisposable
             Generation = generation;
             X = x;
             Y = y;
+            Type = string.Empty;
+        }
+
+        public MobDie(int userId, int mobIndex, double x, double y, string type, int generation = 0)
+        {
+            UserId = userId;
+            MobIndex = mobIndex;
+            Generation = generation;
+            X = x;
+            Y = y;
+            Type = type ?? string.Empty;
         }
     }
 
@@ -580,6 +593,8 @@ public sealed partial class NetNode : IDisposable
     private List<InterBreakableGroundEvent> _pendingInterBreakableGroundEvents = new();
     private List<InterBossRuneUpdateCellsEvent> _pendingBossRuneUpdateCells = new();
     private List<InterPortalEvent> _pendingInterPortalEvents = new();
+    private List<InterGenericActivateEvent> _pendingInterGenericActivateEvents = new();
+    private List<WorldObjectState> _pendingWorldObjectStates = new();
     private int _primaryRemoteId;
 
     private readonly IPEndPoint _bindEp;   // host bind

@@ -168,7 +168,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 clampedLife = 0;
 
             if (mob.life == clampedLife)
+            {
+                if (clampedLife <= 0 && !BossSyncHelpers.IsBossMob(mob))
+                    TryFinalizeNonBossZeroLifeMob(mob, "authoritative_life_already_zero");
                 return;
+            }
 
             var wasAlive = mob.life > 0;
             mob.life = clampedLife;
@@ -180,14 +184,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
                 try
                 {
-                    if (!mob.destroyed)
-                    {
-                        RunWithSuppressedMobDieSend(() =>
-                        {
-                            mob.life = 0;
-                            mob.onDie();
-                        });
-                    }
+                    TryFinalizeNonBossZeroLifeMob(mob, "authoritative_life_new_zero");
 
                     var animManager = GetMobAnimManager(mob);
                     if (animManager?.stack != null)

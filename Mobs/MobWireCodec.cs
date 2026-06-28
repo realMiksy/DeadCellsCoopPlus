@@ -190,6 +190,13 @@ internal static class MobWireCodec
 
     public static string BuildMobDieLine(NetNode.MobDie die)
     {
+        if (!string.IsNullOrWhiteSpace(die.Type))
+        {
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"MOBDIE|{die.UserId}|{die.MobIndex}|{die.X}|{die.Y}|{die.Generation}|{die.Type}\n");
+        }
+
         return string.Create(
             CultureInfo.InvariantCulture,
             $"MOBDIE|{die.UserId}|{die.MobIndex}|{die.X}|{die.Y}|{die.Generation}\n");

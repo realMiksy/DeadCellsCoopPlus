@@ -15,6 +15,8 @@ namespace DeadCellsMultiplayerMod
         private Homunculus? _homunculus;
         private bool _hadGhostVisibleState;
         private bool _ghostWasVisible;
+        private bool _hadGhostGravityState;
+        private bool _ghostHadGravity;
         private bool _hadTemplateHeroVisibleState;
         private bool _templateHeroWasVisible;
         private bool _hadTemplateHeroHeadBlackState;
@@ -45,6 +47,7 @@ namespace DeadCellsMultiplayerMod
             cancellable = false;
             SuppressCineEffects();
             CaptureGhostVisibility();
+            CaptureGhostRuntime();
             CaptureTemplateHeroVisibility();
             HideGhost();
             CreateCorpse();
@@ -147,6 +150,7 @@ namespace DeadCellsMultiplayerMod
             RestoreCineState();
             DisposeCorpse();
             DisposeHomunculus();
+            RestoreGhostRuntime();
             RestoreGhostVisibility();
             RestoreTemplateHeroVisibility();
             EnsureViewportTracksTemplateHero(immediate: true);
@@ -154,94 +158,26 @@ namespace DeadCellsMultiplayerMod
 
         private void EnsureCorpse()
         {
-            var corpse = _corpse;
-            if (corpse == null || corpse.destroyed)
-            {
-                CreateCorpse();
-                return;
-            }
-
-            KeepCorpseActive(corpse);
+            // v6.4.5: remote downed marker is ghost-only. Never create or simulate a
+            // HeroDeadCorpse because it can trigger Dead Cells drop/out-of-game logic.
+            DisposeCorpse();
             ApplyTargetToCorpse(forceStartFall: false);
-            EnsureLethalFallStarted();
-            ApplyTargetToHomunculus();
-            EnsureCorpsePointer();
         }
 
         private void CreateCorpse()
         {
+            // v6.4.5: disabled physical remote corpse creation to prevent cells/blueprints
+            // from being created by spectator-side downed visuals.
             DisposeCorpse();
             DisposeHomunculus();
-
-            if (!IsSafeToCreateCorpse())
-                return;
-
-            try
-            {
-                var corpse = CreateCorpseWithoutDrops();
-                if (corpse == null)
-                    return;
-
-                _corpse = corpse;
-                _lethalFallStarted = false;
-                ApplyTargetToCorpse(forceStartFall: true);
-                ApplyTargetToHomunculus();
-                ApplyInteractionLabel();
-                EnsureCorpsePointer();
-                EnsureTemplateHeroVisible();
-            }
-            catch
-            {
-                _corpse = null;
-            }
+            ApplyTargetToCorpse(forceStartFall: false);
+            EnsureTemplateHeroVisible();
         }
 
         private HeroDeadCorpse? CreateCorpseWithoutDrops()
         {
-            var hero = _templateHero;
-            if (hero == null)
-                return null;
-
-            var originalCells = 0;
-            var capturedCells = false;
-            var originalBlueprints = hero.blueprints;
-            try
-            {
-                originalCells = hero.cells;
-                capturedCells = true;
-                hero.cells = 0;
-                hero.blueprints = (dc.hl.types.ArrayObj)ArrayUtils.CreateDyn().array;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                var corpse = new HeroDeadCorpse(this, hero);
-                corpse.init();
-                corpse.cells = 0;
-                return corpse;
-            }
-            finally
-            {
-                try
-                {
-                    if (capturedCells)
-                        hero.cells = originalCells;
-                }
-                catch
-                {
-                }
-
-                try
-                {
-                    hero.blueprints = originalBlueprints;
-                }
-                catch
-                {
-                }
-            }
+            // v6.4.5: physical corpses are disabled in multiplayer revive visuals.
+            return null;
         }
 
         private bool IsSafeToCreateCorpse()
@@ -268,17 +204,19 @@ namespace DeadCellsMultiplayerMod
 
         private void ApplyTargetToCorpse(bool forceStartFall)
         {
-            var corpse = _corpse;
-            if (corpse == null || corpse.destroyed || !_hasTarget)
+            if (!_hasTarget || _ghost == null)
                 return;
 
-            try { corpse.dir = _targetDir; } catch { }
-            if (!_lethalFallStarted || IsCorpseStabilized(corpse))
-            {
-                SafeSnapCorpse(corpse, _targetX, _targetY);
-            }
-            if (forceStartFall)
-                EnsureLethalFallStarted();
+            try { _ghost.visible = true; } catch { }
+            try { _ghost._targetable = false; } catch { }
+            try { _ghost.hasGravity = false; } catch { }
+            try { _ghost.cancelVelocities(); } catch { }
+            try { _ghost.dx = 0; } catch { }
+            try { _ghost.dy = 0; } catch { }
+            try { _ghost.bdx = 0; } catch { }
+            try { _ghost.bdy = 0; } catch { }
+            try { _ghost.dir = _targetDir; } catch { }
+            try { _ghost.setPosPixel(_targetX, _targetY - 40.0); } catch { }
         }
 
         private static void SafeSnapCorpse(HeroDeadCorpse corpse, double x, double y)
@@ -485,47 +423,26 @@ namespace DeadCellsMultiplayerMod
 
         private void HideGhost()
         {
-            try { _ghost.visible = false; } catch { }
+            // v6.4.5: do not hide the remote player while downed. The ghost itself is now the
+            // safe revive marker, because a physical HeroDeadCorpse can duplicate drops.
+            try { _ghost.visible = true; } catch { }
+            try { _ghost._targetable = false; } catch { }
+            try { _ghost.hasGravity = false; } catch { }
+            try { _ghost.cancelVelocities(); } catch { }
+            try { _ghost.dx = 0; } catch { }
+            try { _ghost.dy = 0; } catch { }
+            try { _ghost.bdx = 0; } catch { }
+            try { _ghost.bdy = 0; } catch { }
+            if (_hasTarget)
+            {
+                try { _ghost.setPosPixel(_targetX, _targetY - 40.0); } catch { }
+            }
         }
 
         private void EnsureCorpsePointer()
         {
-            var corpse = _corpse;
-            if (corpse == null || corpse.destroyed)
-            {
-                ClearCorpsePointer();
-                return;
-            }
-
-            if (_corpsePointer != null)
-            {
-                try
-                {
-                    if (_corpsePointer.destroyed)
-                    {
-                        _corpsePointer = null;
-                    }
-                    else
-                    {
-                        _corpsePointer.e = corpse;
-                        return;
-                    }
-                }
-                catch
-                {
-                    _corpsePointer = null;
-                }
-            }
-
-            try
-            {
-                _corpsePointer = new Pointer(corpse, "".AsHaxeString(), 99999.0, CorpseMarkerColor);
-                PointerFxHelper.SuppressPointerFx(_corpsePointer, PointerFxSuppressionKey);
-            }
-            catch
-            {
-                _corpsePointer = null;
-            }
+            // v6.4.5: no corpse pointer when physical corpse is disabled.
+            ClearCorpsePointer();
         }
 
         private void ClearCorpsePointer()
@@ -612,6 +529,27 @@ namespace DeadCellsMultiplayerMod
             try { _ghostWasVisible = _ghost.visible; }
             catch { _ghostWasVisible = true; }
             _hadGhostVisibleState = true;
+        }
+
+        private void CaptureGhostRuntime()
+        {
+            if (_hadGhostGravityState || _ghost == null)
+                return;
+
+            try { _ghostHadGravity = _ghost.hasGravity; }
+            catch { _ghostHadGravity = true; }
+            _hadGhostGravityState = true;
+        }
+
+        private void RestoreGhostRuntime()
+        {
+            if (_ghost == null || _ghost.destroyed)
+                return;
+
+            try { _ghost.hasGravity = _hadGhostGravityState ? _ghostHadGravity : true; } catch { }
+            try { _ghost.cancelVelocities(); } catch { }
+            _hadGhostGravityState = false;
+            _ghostHadGravity = true;
         }
 
         private void CaptureTemplateHeroVisibility()
@@ -717,8 +655,6 @@ namespace DeadCellsMultiplayerMod
             catch
             {
             }
-
-            try { corpse.dispose(); } catch { }
         }
 
         private void DisposeHomunculus()

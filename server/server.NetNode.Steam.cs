@@ -12,14 +12,26 @@ public sealed partial class NetNode
             return false;
 
         var connect = lobbyId == 0UL ? string.Empty : $"+connect_lobby {lobbyId}";
+
+        var success = true;
         if (!_steamBridge.TrySetRichPresence("connect", connect, out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
-                _log.Warning("[NetNode] Steam worker set rich presence failed: {Error}", error);
-            return false;
+                _log.Warning("[NetNode] Steam worker set rich presence connect failed: {Error}", error);
+            success = false;
         }
 
-        return true;
+        // These keys make Steam friend-list joins more reliable. Some clients receive a
+        // GameRichPresenceJoinRequested_t callback instead of a lobby callback, and that
+        // callback needs the connect string above. The group keys also help Steam associate
+        // the invite with the active lobby instead of only showing generic Dead Cells.
+        var group = lobbyId == 0UL ? string.Empty : lobbyId.ToString(CultureInfo.InvariantCulture);
+        if (!_steamBridge.TrySetRichPresence("steam_player_group", group, out error) && !string.IsNullOrWhiteSpace(error))
+            _log.Warning("[NetNode] Steam worker set rich presence group failed: {Error}", error);
+        if (!_steamBridge.TrySetRichPresence("steam_player_group_size", _connectedClientCount <= 0 ? "1" : (_connectedClientCount + 1).ToString(CultureInfo.InvariantCulture), out error) && !string.IsNullOrWhiteSpace(error))
+            _log.Warning("[NetNode] Steam worker set rich presence group size failed: {Error}", error);
+
+        return success;
     }
 
     internal bool TryClearSteamRichPresence()

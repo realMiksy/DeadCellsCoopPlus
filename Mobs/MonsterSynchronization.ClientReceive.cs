@@ -1292,10 +1292,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             {
                 MobSyncTrace.LogRecvDies(net.IsHost ? "diesOnHost" : "diesOnClient", dies);
 
-                // Host is authoritative for mob death. Ignore remote client die packets.
-                if (net.IsHost)
-                    return;
-
+                // Host remains authoritative, but client-side lethal hits are accepted as validated
+                // kill requests so remote players can finish normal mobs without waiting for the host
+                // to land the final hit. ResolveMobFromDieLocked still checks generation/type/position.
                 ApplyIncomingMobDies(dies);
             }
             finally
@@ -1340,7 +1339,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     }
 
                     if (!isBoss && life <= 0)
-                        continue;
+                    {
+                        // v6.4.5: do not ignore an already-zero non-boss entity.
+                        // It may be the exact stuck empty-HP mob that still needs onDie finalization.
+                    }
 
                     if (s_dieVictimDedupScratch.Add(mob))
                         s_dieVictimsScratch.Add(mob);
@@ -1362,11 +1364,18 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     RunWithAuthoritativeClientBossDie(mob, () =>
                     {
-                        RunWithSuppressedMobDieSend(() =>
+                        if (BossSyncHelpers.IsBossMob(mob))
                         {
-                            mob.life = 0;
-                            mob.onDie();
-                        });
+                            RunWithSuppressedMobDieSend(() =>
+                            {
+                                mob.life = 0;
+                                mob.onDie();
+                            });
+                        }
+                        else
+                        {
+                            TryFinalizeNonBossZeroLifeMob(mob, "incoming_die_packet");
+                        }
                     });
                 }
                 catch
@@ -1468,6 +1477,24 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 if (mob == null)
                     continue;
 
+                // v5.6: client safe-combat mode. Do not run intermediate remote hit reactions
+                // on clients; charged/heavy weapon paths can crash client feedback cleanup.
+                // Lethal/death packets still apply so progression and rune unlocks continue.
+                if (!isHost && !update.ForceDie)
+                {
+                    try
+                    {
+                        if (update.TargetMaxLife > 0 && mob.maxLife != update.TargetMaxLife)
+                            mob.maxLife = update.TargetMaxLife;
+                        if (update.TargetLife >= 0 && mob.life > 0)
+                            mob.life = System.Math.Clamp(update.TargetLife, 1, mob.maxLife > 0 ? mob.maxLife : update.TargetLife);
+                    }
+                    catch
+                    {
+                    }
+                    continue;
+                }
+
                 if (isHost)
                     TryWakeMobForForcedSimulation(mob);
 
@@ -1531,7 +1558,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     var hitEv = $"hit|{appliedLife.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                     if (TryGetCurrentLevelIdentityToken(out var identityToken))
                     {
-                        var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, SingleEvent(hitEv), generation: identityToken);
+                        var mobType = BuildMobStateTypeSignature(mob);
+                        var evUpdate = new NetNode.MobEventUpdate(update.SyncId, sx, sy, dir, SingleEvent(hitEv), mobType, identityToken);
                         MobSyncTrace.LogSendMobEvents(MobSyncNetRoleForTrace(net), SingleUpdate(evUpdate));
                         net.SendMobEvents(SingleUpdate(evUpdate));
                     }
@@ -1548,39 +1576,16 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             try
             {
-                var damage = System.Math.Max(1.0, targetMaxLife * 8.0);
-                var attackUtils = AttackUtils.Class;
-                var createFromHeroAndHit = attackUtils?.createFromHeroAndHit;
-                if (createFromHeroAndHit != null)
-                {
-                    _ = createFromHeroAndHit(null, damage, null, mob);
-                    if (TryFinalizeHostMobDeath(mob))
-                        return;
-                }
-
-                var createFromHero = attackUtils?.createFromHero;
-                var hit = attackUtils?.hit;
-                if (createFromHero != null && hit != null)
-                {
-                    var attack = createFromHero(null, damage, null);
-                    if (attack != null)
-                    {
-                        hit(attack, mob);
-                        if (TryFinalizeHostMobDeath(mob))
-                            return;
-                    }
-                }
-
-                if (TryFinalizeHostMobDeath(mob))
-                    return;
-
-                // Last-resort force; some bosses need explicit life zero before onDie branching.
+                // Do not synthesize an AttackUtils hit with a null hero. Some native/Haxe attack
+                // cleanup paths dereference controller feedback and can crash with
+                // "Null access .stopPoweredFeedback". Directly finalize the authoritative host
+                // death instead; the death packet then drives clients.
                 mob.life = 0;
                 TryFinalizeHostMobDeath(mob);
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "[MobsSync] Host boss finishing hit replay failed");
+                Log.Warning(ex, "[MobsSync] Host boss finishing death failed");
             }
         }
 
@@ -1639,32 +1644,10 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             if (mob == null)
                 return;
 
-            try
-            {
-                RunWithSuppressedMobHitSend(() =>
-                {
-                    var attackUtils = AttackUtils.Class;
-                    var createFromHeroAndHit = attackUtils?.createFromHeroAndHit;
-                    if (createFromHeroAndHit != null)
-                    {
-                        _ = createFromHeroAndHit(null, 1.0, null, mob);
-                        return;
-                    }
-
-                    var createFromHero = attackUtils?.createFromHero;
-                    var hit = attackUtils?.hit;
-                    if (createFromHero == null || hit == null)
-                        return;
-
-                    var attack = createFromHero(null, 1.0, null);
-                    if (attack != null)
-                        hit(attack, mob);
-                });
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "[MobsSync] Special incoming mob hit replay failed");
-            }
+            // Keep this intentionally conservative. Replaying an AttackUtils hit without a real
+            // local hero can enter native powered-feedback cleanup and crash the game. The
+            // authoritative life/state sync is enough for multiplayer correctness.
+            TryWakeMobForForcedSimulation(mob);
         }
 
         private static void TryWakeMobForForcedSimulation(Mob mob)
@@ -1702,6 +1685,11 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (registryMob != null && typeMatchesRegistry)
             {
+                // The log that was sent with the bug report shows many same-sync-id / same-type
+                // hits being dropped only because the client and host positions differed by a
+                // quantized pixel. That is too strict for multiplayer and can prevent the host's
+                // lethal hit/death confirmation from ever applying on the other player. Treat the
+                // sync id + type as authoritative; use the position mismatch as a resync warning.
                 if (!MobHitRegistryStillTrustworthyLocked(registryMob, hit))
                 {
                     MobSyncTrace.LogIncomingMappingMismatch(
@@ -1709,29 +1697,108 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                         hit.MobIndex,
                         hit.Type ?? string.Empty,
                         BuildMobStateTypeSignature(registryMob),
-                        "position_mismatch");
-                    return null;
+                        "position_mismatch_accepted");
                 }
 
                 return registryMob;
             }
 
+            var mismatchReason = registryMob == null ? "missing_sync_id" : "type_mismatch";
             MobSyncTrace.LogIncomingMappingMismatch(
                 "hit",
                 hit.MobIndex,
                 hit.Type ?? string.Empty,
                 registryMob != null ? BuildMobStateTypeSignature(registryMob) : string.Empty,
-                registryMob == null ? "missing_sync_id" : "type_mismatch");
+                mismatchReason);
+
+            if (!string.IsNullOrWhiteSpace(hit.Type) &&
+                TryResolveNearestTypedMobLocked(
+                    hit.MobIndex,
+                    hit.Type,
+                    hit.X,
+                    hit.Y,
+                    MobHitTypedRebindMaxDistancePx,
+                    null,
+                    out var nearestTypedHitMob) && nearestTypedHitMob != null)
+            {
+                TryRebindTrackedMobSyncIdLocked(nearestTypedHitMob, hit.MobIndex);
+                MobSyncTrace.LogBindSyncId("hit_nearest_typed", hit.MobIndex, hit.Type ?? string.Empty, hit.X, hit.Y);
+                return nearestTypedHitMob;
+            }
 
             return null;
+        }
+
+        private static bool TryResolveNearestTypedMobLocked(
+            int syncId,
+            string? expectedType,
+            double x,
+            double y,
+            double maxDistancePx,
+            HashSet<Mob>? reservedMobs,
+            out Mob? selected)
+        {
+            selected = null;
+            if (string.IsNullOrWhiteSpace(expectedType) || trackedMobs.Count == 0)
+                return false;
+
+            Mob? best = null;
+            var bestDistanceSq = double.MaxValue;
+            var maxDistanceSq = maxDistancePx * maxDistancePx;
+
+            for (int i = 0; i < trackedMobs.Count; i++)
+            {
+                var candidate = trackedMobs[i];
+                if (candidate == null)
+                    continue;
+                if (reservedMobs != null && reservedMobs.Contains(candidate))
+                    continue;
+                if (!IsSyncMob(candidate))
+                    continue;
+
+                try
+                {
+                    if (candidate.destroyed || candidate._level == null)
+                        continue;
+                    if (!DoesLevelMatchCurrentIdentityLocked(candidate._level))
+                        continue;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!DoesMobMatchStateType(candidate, expectedType))
+                    continue;
+
+                var dx = GetWorldX(candidate) - x;
+                var dy = GetWorldY(candidate) - y;
+                var distanceSq = dx * dx + dy * dy;
+                if (distanceSq > maxDistanceSq || distanceSq >= bestDistanceSq)
+                    continue;
+
+                bestDistanceSq = distanceSq;
+                best = candidate;
+            }
+
+            selected = best;
+            return selected != null;
         }
 
         private static bool MobHitRegistryTypeMatchesLocked(Mob? registryMob, NetNode.MobHit hit)
         {
             if (registryMob == null)
                 return false;
+
+            // Some old/combined MOBHIT packets arrive without a mob type. Treating an empty type
+            // as fully authoritative caused clients to apply hits to the wrong local mob after
+            // sync-id drift, which is especially dangerous in Fractured Shrines/Tumulus where
+            // JavelinSnake/Comboter updates were followed by Null access .cx crashes. Empty-type
+            // hits are now only accepted when the sync id also points to a mob at the same
+            // quantized position; death packets still have their separate nearest-mob fallback.
             if (string.IsNullOrWhiteSpace(hit.Type))
-                return true;
+                return MobHitRegistryStillTrustworthyLocked(registryMob, hit);
+
             return DoesMobMatchStateType(registryMob, hit.Type);
         }
 
@@ -1775,8 +1842,119 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         {
             lock (Sync)
             {
-                return ResolveMobBySyncIdLocked(die.MobIndex);
+                var mob = ResolveMobBySyncIdLocked(die.MobIndex);
+                if (mob != null)
+                {
+                    if (string.IsNullOrWhiteSpace(die.Type) || DoesMobMatchStateType(mob, die.Type))
+                        return mob;
+
+                    MobSyncTrace.LogIncomingMappingMismatch(
+                        "die",
+                        die.MobIndex,
+                        die.Type ?? string.Empty,
+                        BuildMobStateTypeSignature(mob),
+                        "type_mismatch");
+                    InvalidateTrackedSyncCacheLocked(die.MobIndex, "die_type_mismatch");
+                }
+
+                // Death packets are progression-critical for elite/rune mobs, but killing the
+                // wrong local entity can corrupt native mob AI and crash with Null access .cx
+                // (Clock Tower/Ninja and Fractured Shrines were both hitting this path). v6.2
+                // allows nearest fallback only when the packet carries a matching mob type, or
+                // when an old untyped packet is extremely close to the local mob.
+                mob = ResolveNearestMobFromDieLocked(die);
+                if (mob != null)
+                {
+                    TryRebindTrackedMobSyncIdLocked(mob, die.MobIndex);
+                    MobSyncTrace.LogIncomingMappingMismatch(
+                        "die",
+                        die.MobIndex,
+                        die.Type ?? string.Empty,
+                        BuildMobStateTypeSignature(mob),
+                        "missing_sync_id_fallback_nearest");
+                    return mob;
+                }
+
+                MobSyncTrace.LogIncomingMappingMismatch(
+                    "die",
+                    die.MobIndex,
+                    die.Type ?? string.Empty,
+                    string.Empty,
+                    "missing_sync_id_no_fallback");
+
+                return null;
             }
+        }
+
+        private static Mob? ResolveNearestMobFromDieLocked(NetNode.MobDie die)
+        {
+            Mob? best = null;
+            var bestDistanceSq = double.MaxValue;
+            var hasTypedDie = !string.IsNullOrWhiteSpace(die.Type);
+            var firstPassMaxDistance = hasTypedDie ? MobDieFallbackMaxDistancePx : MobDieUntypedFallbackMaxDistancePx;
+            var maxDistanceSq = firstPassMaxDistance * firstPassMaxDistance;
+
+            for (int i = 0; i < trackedMobs.Count; i++)
+                TryConsiderMobDieFallbackCandidateLocked(trackedMobs[i], die, maxDistanceSq, ref best, ref bestDistanceSq);
+
+            if (best != null)
+                return best;
+
+            // If the sync-id map is stale, the victim may no longer be in trackedMobs even though
+            // the current level still owns it. Search live level entities too. This is deliberately
+            // a second pass with a wider radius: death packets are authoritative and should not leave
+            // no-HP/no-damage ghosts behind, but we still prefer the normal tracked-map resolution.
+            var secondPassMaxDistance = hasTypedDie ? MobDieFallbackExtendedMaxDistancePx : MobDieUntypedFallbackExtendedMaxDistancePx;
+            maxDistanceSq = secondPassMaxDistance * secondPassMaxDistance;
+            try
+            {
+                var entities = currentLevel?.entities;
+                if (entities != null)
+                {
+                    for (int i = 0; i < entities.length; i++)
+                        TryConsiderMobDieFallbackCandidateLocked(entities.getDyn(i) as Mob, die, maxDistanceSq, ref best, ref bestDistanceSq);
+                }
+            }
+            catch
+            {
+            }
+
+            return best;
+        }
+
+        private static void TryConsiderMobDieFallbackCandidateLocked(
+            Mob? candidate,
+            NetNode.MobDie die,
+            double maxDistanceSq,
+            ref Mob? best,
+            ref double bestDistanceSq)
+        {
+            if (candidate == null || !IsSyncMob(candidate))
+                return;
+
+            try
+            {
+                if (candidate.destroyed || candidate._level == null)
+                    return;
+                if (!DoesLevelMatchCurrentIdentityLocked(candidate._level))
+                    return;
+            }
+            catch
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(die.Type) && !DoesMobMatchStateType(candidate, die.Type))
+                return;
+
+            var dx = GetWorldX(candidate) - die.X;
+            var dy = GetWorldY(candidate) - die.Y;
+            var distanceSq = dx * dx + dy * dy;
+            if (distanceSq > maxDistanceSq || distanceSq >= bestDistanceSq)
+                return;
+
+            bestDistanceSq = distanceSq;
+            best = candidate;
         }
 
         private static Mob? ResolveMobBySyncIdLocked(int mobIndex)

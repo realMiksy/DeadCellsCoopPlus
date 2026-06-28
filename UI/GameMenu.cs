@@ -48,6 +48,7 @@ namespace DeadCellsMultiplayerMod
         private static ulong _steamHostSteamId;
         private static bool _steamJoinLobbyResolvePending;
         private static ulong? _pendingOverlayJoinLobbyId;
+        private static ulong _pendingOverlayJoinHostSteamId;
         private static bool _waitingForHost;
         internal const int ClientConnectMaxAttempts = 3;
         private static int _clientConnectAttempt;
@@ -800,6 +801,17 @@ namespace DeadCellsMultiplayerMod
             _steamLobbyCode = SteamConnect.BuildLobbyCodeFromLobbyId(_steamLobbyId);
             ConnectionUI.NotifyConnectionsChanged();
             _log?.Information("[NetMod][Steam] Host lobby ready: id={LobbyId} code={LobbyCode}", _steamLobbyId, _steamLobbyCode);
+            try
+            {
+                if (NetRef?.TrySetSteamHostRichPresence(_steamLobbyId) == true)
+                    _log?.Information("[NetMod][Steam] Host rich presence join data published for lobbyId={LobbyId}", _steamLobbyId);
+                else
+                    _log?.Warning("[NetMod][Steam] Host rich presence join data could not be published; Steam invites may still work through lobby fallback");
+            }
+            catch (Exception ex)
+            {
+                _log?.Warning("[NetMod][Steam] Host rich presence publish failed: {Message}", ex.Message);
+            }
 
             var copied = SteamConnect.TryCopyLobbyCodeToClipboard(_steamLobbyCode)
                          || SteamConnect.TryCopyLobbyIdToClipboard(lobby.LobbyId);
@@ -855,8 +867,11 @@ namespace DeadCellsMultiplayerMod
             {
                 StopNetworkFromMenu();
                 _log?.Warning("[NetMod][SteamWorkerError] {Error}", join.Error);
+                var details = string.IsNullOrWhiteSpace(join.Error)
+                    ? GetText.Instance.GetString("Steam join failed. Check console logs.")
+                    : string.Concat(GetText.Instance.GetString("Steam join failed. Check console logs."), "\n", join.Error);
                 showError(GetText.Instance.GetString("Steam join failed"),
-                    GetText.Instance.GetString("Steam join failed. Check console logs."),
+                    details,
                     showTransport);
                 return;
             }
@@ -898,17 +913,18 @@ namespace DeadCellsMultiplayerMod
             showStatus();
         }
 
-        internal static void HandleSteamOverlayJoinRequest(ulong lobbyId)
+        internal static void HandleSteamOverlayJoinRequest(ulong lobbyId, ulong fallbackHostSteamId = 0UL)
         {
             var screen = GetTitleScreen();
             if (screen == null)
             {
                 _pendingOverlayJoinLobbyId = lobbyId;
-                _log?.Information("[NetMod][Steam] Overlay join request queued: not at main menu (lobbyId={LobbyId})", lobbyId);
+                _pendingOverlayJoinHostSteamId = fallbackHostSteamId;
+                _log?.Information("[NetMod][Steam] Overlay join request queued: not at main menu (lobbyId={LobbyId} fallbackHostSteamId={FallbackHostSteamId})", lobbyId, fallbackHostSteamId);
                 return;
             }
 
-            _log?.Information("[NetMod][Steam] Overlay join starting: lobbyId={LobbyId} screen=ok", lobbyId);
+            _log?.Information("[NetMod][Steam] Overlay join starting: lobbyId={LobbyId} fallbackHostSteamId={FallbackHostSteamId} screen=ok", lobbyId, fallbackHostSteamId);
 
             _menuSelection = NetRole.Client;
             _menuTransport = ConnectionTransport.Steam;
@@ -926,8 +942,37 @@ namespace DeadCellsMultiplayerMod
             ConnectionUI.NotifyConnectionsChanged();
             _ = Task.Run(() =>
             {
-                _log?.Information("[NetMod][Steam] Overlay join resolving lobby (lobbyId={LobbyId})", lobbyId);
-                var ok = SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out var join);
+                _log?.Information("[NetMod][Steam] Overlay join resolving lobby (lobbyId={LobbyId} fallbackHostSteamId={FallbackHostSteamId})", lobbyId, fallbackHostSteamId);
+                SteamConnect.JoinLobbyResult join;
+                var ok = false;
+                if (lobbyId != 0UL)
+                {
+                    ok = SteamConnect.TryResolveJoinEndpointFromLobbyId(lobbyId, out join);
+                }
+                else
+                {
+                    join = new SteamConnect.JoinLobbyResult
+                    {
+                        Success = false,
+                        LobbyId = 0UL,
+                        HostSteamId = 0UL,
+                        Endpoint = null,
+                        Error = "Steam overlay did not provide a lobby id"
+                    };
+                }
+                if (!ok && fallbackHostSteamId != 0UL)
+                {
+                    _log?.Warning("[NetMod][Steam] Overlay lobby resolution failed for lobbyId={LobbyId}; falling back to direct friend Steam P2P hostSteamId={HostSteamId}. Error={Error}", lobbyId, fallbackHostSteamId, join.Error ?? string.Empty);
+                    join = new SteamConnect.JoinLobbyResult
+                    {
+                        Success = true,
+                        LobbyId = lobbyId,
+                        HostSteamId = fallbackHostSteamId,
+                        Endpoint = null,
+                        Error = string.Empty
+                    };
+                    ok = true;
+                }
                 EnqueueMainThread(() => ApplySteamJoinResult(screen, ok, join, fromOverlay: true));
             });
         }

@@ -33,6 +33,7 @@ using DeadCellsMultiplayerMod.MultiplayerModUI.Minimap;
 using DeadCellsMultiplayerMod.MultiplayerModUI.lifeUI;
 using DeadCellsMultiplayerMod.MultiplayerModUI.LevelExit;
 using DeadCellsMultiplayerMod.MultiplayerModUI.Connection;
+using DeadCellsMultiplayerMod.WorldSync;
 using DeadCellsMultiplayerMod.Tools.ModLang;
 using DeadCellsMultiplayerMod.Tools;
 using DeadCellsMultiplayerMod.KingHead;
@@ -59,6 +60,7 @@ namespace DeadCellsMultiplayerMod
         private static IDisposable? s_steamRichPresenceJoinCallback;
         private static bool s_steamOverlayCallbackPending;
         private static Timer? s_steamCallbackPumpTimer;
+        private static bool s_isDisposing;
         private static int s_steamOverlayCallbackRetryCount;
         private static bool s_steamApiReady;
         private static string s_lastSteamLaunchCommand = string.Empty;
@@ -143,16 +145,27 @@ namespace DeadCellsMultiplayerMod
         private double _postReviveLockY;
         private int _reviveHoldTargetId;
         private long _reviveHoldStartedTicks;
-        private const double ReviveUseDistancePx = 48.0;
+        private int _reviveBurstTargetId;
+        private long _reviveBurstUntilTicks;
+        private long _nextReviveBurstSendTicks;
+        private bool _localDownedStatsCaptured;
+        private int _localDownedSavedMaxLife;
+        private int _localDownedSavedBrutalityTier;
+        private int _localDownedSavedSurvivalTier;
+        private int _localDownedSavedTacticTier;
+        private int _localDownedSavedBonusLife;
+        private const double ReviveUseDistancePx = 192.0;
         private const double ReviveAttemptCooldownSeconds = 0.2;
-        private const double ReviveHoldSeconds = 0.7;
+        private const double ReviveHoldSeconds = 0.45;
+        private const double ReviveRequestBurstSeconds = 1.25;
+        private const double ReviveRequestBurstIntervalSeconds = 0.18;
         private const double ReviveHomunculusBodyMaxDistancePx = 64.0;
-        private const double DownedStateResendSeconds = 0.4;
+        private const double DownedStateResendSeconds = 0.25;
         private const double DownedHeadStateResendSeconds = 1.0 / 30.0;
         private const double DownedGhostBodyYOffsetPx = 40.0;
         private const double LocalReviveBodyYOffsetPx = 0.5;
-        private const double PostRevivePositionLockSeconds = 0.0;
-        private const string ReviveHintText = "Hold to revive.";
+        private const double PostRevivePositionLockSeconds = 0.15;
+        private const string ReviveHintText = "Hold R / controller action to revive.";
         private string _lastDoorMarkerLevelId = string.Empty;
         private int _lastDoorMarkerToken = int.MinValue;
         private string _localLastDoorMarkerLevelId = string.Empty;
@@ -211,6 +224,7 @@ namespace DeadCellsMultiplayerMod
         {
             "BeholderDeath", "GiantDeath", "GiantDeath4", "KillKingCinem", "KillQueenCinem",
             "QueenDefeated", "KillDookuBeastCinem", "FakeKillDooku", "RichterDeath",
+            "ConciergeDeath", "TimeKeeperDeath", "GardenerDeath", "ScarecrowDeath", "MamaTickDeath",
             "EndCollectorPreSmash", "SmashCinem", "EndCollectorPostSmash", "EndCollectorPostSmashKS"
         };
         private static readonly HashSet<string> BossIntroCineTypeNames = new(StringComparer.Ordinal)
@@ -233,6 +247,13 @@ namespace DeadCellsMultiplayerMod
         private const double BossHeroTeleportEchoSuppressSeconds = 1.5;
         private int _suppressBossCineSendDepth;
         private long _suppressBossTriggerNetSendUntilTick;
+        private long _bossVictoryRecoveryUntilTicks;
+        private long _bossVictoryRecoveryUnlockAfterTicks;
+        private long _nextBossVictoryRecoveryTick;
+        private string _bossVictoryRecoveryReason = string.Empty;
+        private string _bossDeathPollLevelId = string.Empty;
+        private bool _bossDeathPollSawLiveBoss;
+        private long _bossDeathPollGoneSinceTicks;
 
 
         void IOnAfterLoadingCDB.OnAfterLoadingCDB(dc._Data_ cdb)
@@ -373,6 +394,14 @@ namespace DeadCellsMultiplayerMod
                 DebugModuleId.InteractionSync,
                 "InteractionSync",
                 () => _ = new InteractionSync(this));
+
+            // v6.4.4: re-enable WorldObjectSync in visibility-safe / host-authoritative mode.
+            // It no longer reads sprite culling as "hidden" and never forces spr.visible=false
+            // or alpha=0, which prevents the v6.4 invisible synced-object regression.
+            _ = new WorldObjectSync(this);
+
+            _ = new StuckRecoveryFailsafe(this);
+
             InitializeOptionalModule(
                 DebugModuleId.ConnectionUI,
                 "ConnectionUI",
@@ -426,12 +455,12 @@ namespace DeadCellsMultiplayerMod
             Hook_Hero.canBeHitBy += Hook_Hero_canBeHitBy;
             Hook_Game.hasCinematic += Hook_Game_hasCinematic;
             Hook_ZDoor.onActivate += Hook_ZDoor_onActivate;
-            Hook_BossRushDoor.initGfx += Hook_BossRushDoor_initGfx;
             Hook_Hero.applySkin += Hook_Hero_applySkin;
             Hook_HeroHead.initCustomHead += Hook_HeroHead_initCustomHead;
             Hook_DiveAttack.onStart += Hook_DiveAttack_onStart;
             Hook_DiveAttack.onOwnerLand += Hook_DiveAttack_onOwnerLand;
             Hook_HiddenTrigger.trigger += Hook_HiddenTrigger_trigger;
+            // v5.6: do not hook HiddenTrigger.fixedUpdate; v5.5's trigger crashguard was too invasive.
             Hook__HeroDeath.__constructor__ += Hook__HeroDeath__constructor__;
             Hook__HeroDeathBase.__constructor__ += Hook__HeroDeathBase__constructor__;
             Hook__HeroDeathContinue.__constructor__ += Hook__HeroDeathContinue__constructor__;
@@ -514,92 +543,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        /// <summary>
-        /// Client often lacks Boss Rush door animation frames until assets settle; HL throws "Unknown frame: bossRushDoor*".
-        /// Only swallow those — rethrow everything else so unrelated bugs are not masked (and to avoid odd door state).
-        /// </summary>
-        private static bool IsBossRushDoorMissingFrameException(Exception ex)
-        {
-            for (var cur = ex; cur != null; cur = cur.InnerException)
-            {
-                var msg = cur.Message;
-                if (string.IsNullOrWhiteSpace(msg))
-                    continue;
-                if (msg.IndexOf("Unknown frame", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-                if (msg.IndexOf("bossRushDoor", StringComparison.OrdinalIgnoreCase) < 0)
-                    continue;
-                return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// At most one deferred <see cref="GameMenu.EnqueueMainThread"/> <c>orig(self)</c> per door instance.
-        /// </summary>
-        private static readonly ConditionalWeakTable<BossRushDoor, object> s_bossRushDoorGfxDeferredPending = new();
-
-        /// <summary>
-        /// Client-only: missing boss-rush door anim frames. Do not call <see cref="Assets.Class.lib.getLevel"/> for
-        /// BossRushZone from this hook — it can run during level/entity init and corrupt unrelated HL state (casts such as
-        /// <c>tool.CPoint</c> vs <c>level.LevelMap</c>).
-        /// </summary>
-        private void Hook_BossRushDoor_initGfx(Hook_BossRushDoor.orig_initGfx orig, BossRushDoor self)
-        {
-            try
-            {
-                orig(self);
-            }
-            catch (Exception ex)
-            {
-                if (_netRole != NetRole.Client || self == null || !IsBossRushDoorMissingFrameException(ex))
-                    throw;
-
-                string? bossRushType = null;
-                try { bossRushType = self.bossRushType?.ToString(); } catch { }
-
-                Logger.Warning("[NetMod] BossRushDoor.initGfx failed on client level={LevelId}: type={Type} ({Msg})",
-                    levelId,
-                    bossRushType ?? "null",
-                    ex.Message);
-
-                if (s_bossRushDoorGfxDeferredPending.TryGetValue(self, out _))
-                {
-                    Logger.Warning("[NetMod] BossRushDoor.initGfx second sync failure before deferred retry; clearing spr level={LevelId}", levelId);
-                    try { self.spr = null; } catch (Exception ex2) { Logger.Warning(ex2, "[NetMod] BossRushDoor spr=null failed"); }
-                    return;
-                }
-
-                s_bossRushDoorGfxDeferredPending.Add(self, new object());
-                var localOrig = orig;
-                var localSelf = self;
-                GameMenu.EnqueueMainThread(() =>
-                {
-                    try
-                    {
-                        localOrig(localSelf);
-                    }
-                    catch (Exception ex2)
-                    {
-                        if (_netRole != NetRole.Client || !IsBossRushDoorMissingFrameException(ex2))
-                        {
-                            Logger.Warning(ex2, "[NetMod] BossRushDoor.initGfx deferred retry unexpected error");
-                            return;
-                        }
-
-                        string? t = null;
-                        try { t = localSelf.bossRushType?.ToString(); } catch { }
-                        Logger.Warning("[NetMod] BossRushDoor.initGfx deferred retry still missing frames level={LevelId}: type={Type} ({Msg})",
-                            levelId,
-                            t ?? "null",
-                            ex2.Message);
-                        try { localSelf.spr = null; } catch (Exception ex3) { Logger.Warning(ex3, "[NetMod] BossRushDoor spr=null failed"); }
-                    }
-                });
-            }
-        }
-
         private void Hook_HiddenTrigger_trigger(Hook_HiddenTrigger.orig_trigger orig, HiddenTrigger self, Entity dh)
         {
             var senderLevelId = string.IsNullOrWhiteSpace(levelId) ? string.Empty : levelId.Trim();
@@ -667,6 +610,9 @@ namespace DeadCellsMultiplayerMod
 
         private void Hook_Game_onDispose(Hook_Game.orig_onDispose orig, dc.pr.Game self)
         {
+            s_isDisposing = true;
+            StopSteamCallbackPumpTimer();
+
             if (_netRole == NetRole.Client)
             {
                 var user = self?.user;
@@ -719,6 +665,7 @@ namespace DeadCellsMultiplayerMod
             PumpSteamCallbacksForOverlay();
             GameMenu.ProcessMainThreadQueue();
             GameMenu.HandleTextInputClipboardShortcuts();
+            // v5.6: frame stability guards disabled; they mutated live Hashlink structures.
             _ghost?.UpdateLabels();
             ProcessCameraSpectateInput();
         }
@@ -809,12 +756,14 @@ namespace DeadCellsMultiplayerMod
             if (me != null && me?.spr?._animManager != null && ReferenceEquals(self, me.spr._animManager))
             {
                 if (!DeadCellsMultiplayerMod.Ghost.KingWeaponSupport.IsInKingContext &&
-                    !IsAttackAnim(play))
+                    IsSafeNetworkHeroAnim(play))
                     SendHeroAnim(play, queueAnim, g);
             }
             if(me != null && me.heroHead.customHeadSpr != null && ReferenceEquals(self, me.heroHead.customHeadSpr._animManager))
             {
-                SendHeadAnim(play);
+                // v5.7: apply the same attack/weapon filter to head animation packets.
+                if (IsSafeNetworkHeroAnim(play))
+                    SendHeadAnim(play);
             }
 
             return orig(self, plays, queueAnim, g);
@@ -841,6 +790,21 @@ namespace DeadCellsMultiplayerMod
             return false;
         }
 
+
+        private static bool IsSafeNetworkHeroAnim(string anim)
+        {
+            if (string.IsNullOrWhiteSpace(anim)) return false;
+
+            // v5.9: visual-only animation sync. Remote weapon objects/projectiles stay disabled
+            // for stability, but the ghost body/head may play the same vanilla animation name.
+            // This restores visible attacks, bows, healing, scrolls, teleports, talking, ladders,
+            // exits, and other one-shot player animations without constructing a remote weapon.
+            var a = anim.Trim();
+            if (a.Length == 0) return false;
+            if (a.IndexOf("stopPoweredFeedback", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return true;
+        }
+
         public void hook_level_changed(Hook_Hero.orig_onLevelChanged orig, Hero self, Level oldLevel)
         {
             kingInitialized = false;
@@ -851,6 +815,21 @@ namespace DeadCellsMultiplayerMod
             _appliedBossHeroTeleportLevels.Clear();
             _lastBossCineSentLevelId = null;
             _lastBossCineSentTick = 0;
+            var oldLevelIdForBossRecovery = string.Empty;
+            try { oldLevelIdForBossRecovery = oldLevel?.map?.id?.ToString()?.Trim() ?? string.Empty; } catch { }
+            var preserveBossVictoryRecovery =
+                _bossVictoryRecoveryUntilTicks != 0 &&
+                IsBossLevel(oldLevelIdForBossRecovery);
+            if (!preserveBossVictoryRecovery)
+            {
+                _bossVictoryRecoveryUntilTicks = 0;
+                _bossVictoryRecoveryUnlockAfterTicks = 0;
+                _nextBossVictoryRecoveryTick = 0;
+                _bossVictoryRecoveryReason = string.Empty;
+            }
+            _bossDeathPollLevelId = string.Empty;
+            _bossDeathPollSawLiveBoss = false;
+            _bossDeathPollGoneSinceTicks = 0;
             ResetFakeDeathState(unlockLocalHero: true, sendNetworkUpState: false, clearRemoteDownedTracking: false, clearDownedAnnouncements: false);
             me = self;
             me._targetable = true;
@@ -920,6 +899,8 @@ namespace DeadCellsMultiplayerMod
             ApplyReceivedBossHeroTeleport();
             ApplyReceivedBossCine();
             SuppressRemoteBossDeathCineIfNeeded();
+            TryScheduleBossVictoryRecoveryFromBossDeath();
+            MaintainBossVictoryUnstuckRecovery();
 
             var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
             if (hitchMs >= RuntimeHitchWatch.ModFrameSlowThresholdMs)

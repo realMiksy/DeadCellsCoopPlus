@@ -348,6 +348,9 @@ namespace DeadCellsMultiplayerMod
 
         public static double[] rLastX = new double[NetNode.MaxClientSlots];
         public static double[] rLastY = new double[NetNode.MaxClientSlots];
+        public static double[] EmergencyLastRemoteX = new double[NetNode.MaxClientSlots];
+        public static double[] EmergencyLastRemoteY = new double[NetNode.MaxClientSlots];
+        public static long[] EmergencyLastRemoteTicks = new long[NetNode.MaxClientSlots];
 
         internal static bool TryGetClientIndex(int localId, int remoteId, out int index)
         {
@@ -496,6 +499,9 @@ namespace DeadCellsMultiplayerMod
 
                     remotePlayerId = remote.Id;
                     clientIds[index] = remote.Id;
+                    EmergencyLastRemoteX[index] = remote.X;
+                    EmergencyLastRemoteY[index] = remote.Y;
+                    EmergencyLastRemoteTicks[index] = Stopwatch.GetTimestamp();
                     ProcessRemoteDoorMarker(remote);
                     if (!ShouldKeepRemoteKingVisibleInRoom(remote, localLevelId))
                     {
@@ -678,10 +684,29 @@ namespace DeadCellsMultiplayerMod
             if (!string.Equals(remoteContextLevelId, localContextLevelId, StringComparison.Ordinal))
                 return false;
 
+            // Same main level should keep the remote visible even if a stale door/room marker is
+            // temporarily different after forced exit assist or teleporter transitions.  Only use
+            // the room-token hide when the local player is actually inside a sublevel/branch.
+            if (!IsLocalHeroInSubLevel())
+                return true;
+
             if (remote.RoomId.Value != localBranchToken)
                 return false;
 
             return true;
+        }
+
+        private static bool IsLocalHeroInSubLevel()
+        {
+            try
+            {
+                var level = me?._level ?? ModCore.Modules.Game.Instance?.HeroInstance?._level;
+                return level != null && level.isSubLevel;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private void ProcessRemoteDoorMarker(NetNode.RemoteSnapshot remote)
@@ -823,6 +848,8 @@ namespace DeadCellsMultiplayerMod
             clientLastDownedOffsets[slot] = false;
             rLastX[slot] = 0;
             rLastY[slot] = 0;
+            // Do not clear EmergencyLastRemoteX/Y here. F8 recovery needs the last known
+            // network position even when the visible ghost was hidden by a room/sublevel mismatch.
 
             if (!clearIdentity)
                 return;
@@ -839,46 +866,15 @@ namespace DeadCellsMultiplayerMod
 
         private void ReceiveGhostWeapons()
         {
-            var hitchStart = RuntimeHitchWatch.Start();
+            // v5.7: stability mode. Do not create/equip the remote player's real weapons on
+            // the ghost. Heavy/charged weapons such as Flint can start vanilla powered-feedback
+            // cleanup on the receiving client, where the ghost has no real local controller,
+            // causing Hashlink "Null access .stopPoweredFeedback" crashes.
             var net = _net;
-            if (net == null || me == null) return;
+            if (net == null) return;
 
-            if (!net.TryConsumeRemoteWeaponSnapshots(out var updates))
-                return;
-
-            try
-            {
-                var applied = 0;
-
-                foreach (var update in updates)
-                {
-                    var updateStart = RuntimeHitchWatch.Start();
-                    ApplyRemoteWeaponUpdate(update.Id, update.Kind, update.Slot, update.PermanentId, update.Ammo);
-                    applied++;
-                    LogGhostRuntimeStepIfSlow(
-                        "ModEntry.ReceiveGhostWeapons.ApplyRemoteWeaponUpdate",
-                        updateStart,
-                        string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"remoteId={update.Id} slot={update.Slot} permanentId={update.PermanentId} ammo={(update.Ammo.HasValue ? update.Ammo.Value : -1)}"));
-                }
-
-                var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-                if (hitchMs >= RuntimeHitchWatch.GhostRuntimeSlowThresholdMs)
-                {
-                    RuntimeHitchWatch.LogSlow(
-                        Logger,
-                        "ModEntry.ReceiveGhostWeapons",
-                        hitchMs,
-                        string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"updates={updates.Count} applied={applied}"));
-                }
-            }
-            finally
-            {
+            if (net.TryConsumeRemoteWeaponSnapshots(out var updates))
                 NetNode.ReleaseConsumedList(updates);
-            }
         }
 
         private void DrainRemoteCombatQueuesAfterLevelChange()
@@ -895,108 +891,20 @@ namespace DeadCellsMultiplayerMod
 
         private void ReceiveGhostAttacks()
         {
-            var hitchStart = RuntimeHitchWatch.Start();
+            // v5.7: stability mode. Drain remote attack packets but do not replay them on the
+            // ghost weapon manager. The host's mob HP/death packets still drive progression;
+            // this only removes client-side visual attack simulation that crashes with Flint.
             var net = _net;
-            if (net == null || me == null) return;
+            if (net == null) return;
 
-            if (!net.TryConsumeRemoteAttacks(out var attacks))
-                return;
-
-            try
-            {
-                var localId = net.id;
-                var diveHandled = 0;
-                var queuedAttacks = 0;
-                foreach (var attack in attacks)
-                {
-                    var attackStart = RuntimeHitchWatch.Start();
-                    if (TryHandleRemoteDiveAttack(attack, localId))
-                    {
-                        diveHandled++;
-                        LogGhostRuntimeStepIfSlow(
-                            "ModEntry.ReceiveGhostAttacks.Remote",
-                            attackStart,
-                            string.Create(
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                $"remoteId={attack.Id} slot={attack.Slot} dive=1 action={attack.Action}"));
-                        continue;
-                    }
-
-                    if (attack.Slot < 0 &&
-                        (string.IsNullOrWhiteSpace(attack.Kind) ||
-                         attack.Kind.StartsWith("__", StringComparison.Ordinal)))
-                    {
-                        continue;
-                    }
-
-                    ApplyRemoteWeaponUpdate(attack.Id, attack.Kind, attack.Slot, attack.PermanentId, attack.Ammo);
-                    if (!TryGetClientIndex(localId, attack.Id, out var index))
-                        continue;
-
-                    var client = clients[index];
-                    if (client?.kingWeaponsManager == null) continue;
-                    if (attack.Action == RemoteAttackAction.Interrupt)
-                        client.kingWeaponsManager.queueInterrupt(attack.Slot);
-                    else
-                        client.kingWeaponsManager.queueAttack(attack.Slot);
-
-                    queuedAttacks++;
-                    LogGhostRuntimeStepIfSlow(
-                        "ModEntry.ReceiveGhostAttacks.Remote",
-                        attackStart,
-                        string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"remoteId={attack.Id} slot={attack.Slot} dive=0 action={attack.Action} kind={attack.Kind ?? string.Empty}"));
-                }
-
-                var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-                if (hitchMs >= RuntimeHitchWatch.GhostRuntimeSlowThresholdMs)
-                {
-                    RuntimeHitchWatch.LogSlow(
-                        Logger,
-                        "ModEntry.ReceiveGhostAttacks",
-                        hitchMs,
-                        string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"attacks={attacks.Count} diveHandled={diveHandled} queuedAttacks={queuedAttacks}"));
-                }
-            }
-            finally
-            {
+            if (net.TryConsumeRemoteAttacks(out var attacks))
                 NetNode.ReleaseConsumedList(attacks);
-            }
         }
 
         private void UpdateGhostWeapons()
         {
-            var hitchStart = RuntimeHitchWatch.Start();
-            var activeManagers = 0;
-            for (int i = 0; i < clients.Length; i++)
-            {
-                var client = clients[i];
-                if (client?.kingWeaponsManager == null) continue;
-                activeManagers++;
-                var managerStart = RuntimeHitchWatch.Start();
-                client.kingWeaponsManager.update();
-                LogGhostRuntimeStepIfSlow(
-                    "ModEntry.UpdateGhostWeapons.Manager",
-                    managerStart,
-                    string.Create(
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        $"slot={i} remoteId={clientIds[i]} shield={(client.kingWeaponsManager.IsShieldActive ? 1 : 0)}"));
-            }
-
-            var hitchMs = RuntimeHitchWatch.GetElapsedMilliseconds(hitchStart);
-            if (hitchMs >= RuntimeHitchWatch.GhostRuntimeSlowThresholdMs)
-            {
-                RuntimeHitchWatch.LogSlow(
-                    Logger,
-                    "ModEntry.UpdateGhostWeapons",
-                    hitchMs,
-                    string.Create(
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        $"activeManagers={activeManagers} clients={clients.Length}"));
-            }
+            // v5.7: stability mode. Do not tick remote ghost weapon managers. Their internal
+            // weapon feedback state is not safe for non-local ghosts in the current DCCM build.
         }
 
         private static int CountPendingClientHeadRecreate()
@@ -1024,58 +932,62 @@ namespace DeadCellsMultiplayerMod
         {
             if (client?.spr?._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
-            var shieldActive = client.kingWeaponsManager != null && client.kingWeaponsManager.IsShieldActive;
-            if (shieldActive && ShouldLoopRemoteAnim(anim))
-            {
-                return;
-            }
-
-            if (anim.IndexOf("hold", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                anim.IndexOf("shield", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                anim.IndexOf("parry", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                anim.IndexOf("block", StringComparison.OrdinalIgnoreCase) >= 0)
-                return;
+            if (!IsSafeNetworkHeroAnim(anim)) return;
 
             var animManager = client.spr._animManager;
             var current = client.spr.groupName;
-            if(current != null && string.Equals(current.ToString(), anim, StringComparison.Ordinal))
+            if (current != null && string.Equals(current.ToString(), anim, StringComparison.Ordinal))
                 return;
 
-            if (ShouldLoopRemoteAnim(anim))
+            try
             {
-                if (!shieldActive)
+                if (ShouldLoopRemoteAnim(anim))
                 {
                     client.removeAllAffects(96);
                     client.removeAllAffects(98);
                     client.removeAllAffects(99);
+                    animManager.play(anim.AsHaxeString(), null, null).loop(null);
+                    return;
                 }
-                animManager.play(anim.AsHaxeString(), null, null).loop(null);
-                return;
+
+                // Visual-only: play the remote hero animation, but do not replay the weapon/action
+                // object itself. This is what keeps Flint and powered-feedback weapons stable.
+                animManager.play(anim.AsHaxeString(), queueAnim, g).stopOnLastFrame(Ref<bool>.Null);
             }
-            animManager.play(anim.AsHaxeString(), queueAnim, g).stopOnLastFrame(Ref<bool>.Null);
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[GhostSync] Remote visual animation failed anim={Anim}", anim);
+            }
         }
 
         private static bool ShouldLoopRemoteAnim(string anim)
         {
-            if(string.IsNullOrWhiteSpace(anim)) return false;
+            if (string.IsNullOrWhiteSpace(anim)) return false;
             var a = anim.Trim();
 
-            // Don't ever force-loop weapon/hold-ish states; those should be driven by weapon replication.
-            if(IsAttackAnim(a)) return false;
-            if(a.IndexOf("guard", StringComparison.OrdinalIgnoreCase) >= 0) return false;
-            if(a.IndexOf("defend", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            // v5.9: loop only true locomotion/idle animations. One-shot actions such as
+            // attacks, bow shots, healing, scroll pickup, talking, teleporter use, ladders,
+            // exits, ground-pound and doors must play once; looping them made movement/level
+            // transitions look wrong.
+            if (IsAttackAnim(a)) return false;
+            if (a.IndexOf("heal", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("potion", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("scroll", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("talk", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("teleport", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("door", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("ground", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("bound", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("stair", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (a.IndexOf("exit", StringComparison.OrdinalIgnoreCase) >= 0) return false;
 
             if (a.StartsWith("idle", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("run", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.StartsWith("walk", StringComparison.OrdinalIgnoreCase)) return true;
             if (a.IndexOf("move", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("fall", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("land", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("climb", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("ladder", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("crouch", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (a.IndexOf("volte", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (a.IndexOf("remain", StringComparison.OrdinalIgnoreCase) >= 0) return true;
 
             return false;
@@ -1085,9 +997,18 @@ namespace DeadCellsMultiplayerMod
         {
             if (client == null || client?.head == null || client?.head?.customHeadSpr._animManager == null) return;
             if (string.IsNullOrWhiteSpace(anim)) return;
-            var animManager = client.head.customHeadSpr._animManager;
-            animManager.play(anim.AsHaxeString(), null, null).loop(null);
-            animManager.genSpeed = 0.4;
+            if (!IsSafeNetworkHeroAnim(anim)) return;
+
+            try
+            {
+                var animManager = client.head.customHeadSpr._animManager;
+                animManager.play(anim.AsHaxeString(), null, null).loop(null);
+                animManager.genSpeed = 0.4;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "[GhostSync] Remote head animation failed anim={Anim}", anim);
+            }
         }
 
         private void SendHeroAnim(string anim, int? queueAnim, bool? g, bool force = false)
@@ -1129,6 +1050,7 @@ namespace DeadCellsMultiplayerMod
 
         private void SendInventoryWeapon(InventItem item, int slot)
         {
+            if (RemoteWeaponVisualSyncDisabled()) return;
             if (_netRole == NetRole.None) return;
             if (item == null) return;
             if (!TryGetWeaponKindId(item, out var kindId)) return;
@@ -1148,6 +1070,12 @@ namespace DeadCellsMultiplayerMod
                 return !string.IsNullOrWhiteSpace(kindId);
             }
             return false;
+        }
+
+        private static bool RemoteWeaponVisualSyncDisabled()
+        {
+            // Method instead of a const so the compiler does not mark the fallback body unreachable.
+            return true;
         }
 
         private static int? GetWeaponAmmoForSync(InventItem? item)
@@ -1183,6 +1111,11 @@ namespace DeadCellsMultiplayerMod
 
         private void ApplyRemoteWeaponUpdate(int remoteId, string? kindId, int slot, int permanentId, int? ammo = null)
         {
+            // v5.7: disabled for stability. Creating/equipping remote InventItem weapons on
+            // ghost heroes can trigger Hashlink powered-feedback cleanup crashes with Flint.
+            if (RemoteWeaponVisualSyncDisabled())
+                return;
+
             var hitchStart = RuntimeHitchWatch.Start();
             if (string.IsNullOrWhiteSpace(kindId)) return;
             var net = _net;

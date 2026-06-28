@@ -55,9 +55,11 @@ namespace DeadCellsMultiplayerMod
         {
             if (_pendingOverlayJoinLobbyId is not { } lobbyId)
                 return;
+            var fallbackHostSteamId = _pendingOverlayJoinHostSteamId;
             _pendingOverlayJoinLobbyId = null;
-            _log?.Information("[NetMod][Steam] Processing queued overlay join request (lobbyId={LobbyId})", lobbyId);
-            HandleSteamOverlayJoinRequest(lobbyId);
+            _pendingOverlayJoinHostSteamId = 0UL;
+            _log?.Information("[NetMod][Steam] Processing queued overlay join request (lobbyId={LobbyId} fallbackHostSteamId={FallbackHostSteamId})", lobbyId, fallbackHostSteamId);
+            HandleSteamOverlayJoinRequest(lobbyId, fallbackHostSteamId);
         }
 
         private static void TryDisconnectWhenReturningToMainMenu()

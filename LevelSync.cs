@@ -245,6 +245,12 @@ namespace DeadCellsMultiplayerMod
             if (!string.Equals(currentLevelId, graphLevelId, StringComparison.Ordinal))
                 return;
 
+            if (IsClientLevelReloadUnsafe(hero, level, graphLevelId, out var unsafeReason))
+            {
+                _log?.Information("[NetMod] Skipping level-graph reload for {LevelId}: {Reason}", graphLevelId, unsafeReason);
+                return;
+            }
+
             lock (_levelGraphLock)
             {
                 if (!_remoteLevelGraphs.ContainsKey(graphLevelId))
@@ -269,6 +275,62 @@ namespace DeadCellsMultiplayerMod
                 targetLevelId,
                 offsetCx,
                 offsetCy);
+        }
+
+        private static bool IsClientLevelReloadUnsafe(Hero hero, Level level, string graphLevelId, out string reason)
+        {
+            reason = string.Empty;
+
+            try
+            {
+                if (hero == null || hero.destroyed)
+                {
+                    reason = "hero unavailable";
+                    return true;
+                }
+
+                if (level == null || level.destroyed || level.map == null)
+                {
+                    reason = "level unavailable";
+                    return true;
+                }
+            }
+            catch
+            {
+                reason = "hero/level validity check failed";
+                return true;
+            }
+
+            try
+            {
+                var game = dc.pr.Game.Class.ME;
+                var cine = game?.curCine;
+                if (cine != null && !cine.destroyed)
+                {
+                    reason = "cinematic active";
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var room = TryGetRoomAt(level, hero.cx, hero.cy);
+                if (room == null)
+                {
+                    reason = "hero is not in a valid room";
+                    return true;
+                }
+            }
+            catch
+            {
+                reason = "hero room check failed";
+                return true;
+            }
+
+            return false;
         }
 
         private static bool TryBeginLevelGraphReload(string levelId, string payload)
@@ -314,6 +376,12 @@ namespace DeadCellsMultiplayerMod
             var currentLevelId = level.map.id?.ToString();
             if (!string.Equals(currentLevelId, graphLevelId, StringComparison.Ordinal))
                 return;
+
+            if (IsClientLevelReloadUnsafe(hero, level, graphLevelId, out var unsafeReason))
+            {
+                _log?.Information("[NetMod] Skipping boss-rune reload for {LevelId}: {Reason}", graphLevelId, unsafeReason);
+                return;
+            }
 
             if (!TryGetRemoteBossRune(out var remoteBossRune))
                 return;
