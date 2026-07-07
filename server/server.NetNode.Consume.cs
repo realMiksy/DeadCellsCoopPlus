@@ -345,22 +345,6 @@ public sealed partial class NetNode
         }
     }
 
-    public bool TryConsumeInterGenericActivateEvents(out List<InterGenericActivateEvent> events)
-    {
-        lock (_sync)
-        {
-            return TryConsumePendingListLocked(ref _pendingInterGenericActivateEvents, out events);
-        }
-    }
-
-    public bool TryConsumeWorldObjectStates(out List<WorldObjectState> states)
-    {
-        lock (_sync)
-        {
-            return TryConsumePendingListLocked(ref _pendingWorldObjectStates, out states);
-        }
-    }
-
     public bool TryGetRemoteHpSnapshots(out List<RemoteHpSnapshot> snapshot)
     {
         lock (_sync)

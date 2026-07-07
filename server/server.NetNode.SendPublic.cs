@@ -548,11 +548,6 @@ public sealed partial class NetNode
 
     public void SendMobDie(int mobIndex, double x, double y, int generation = 0)
     {
-        SendMobDie(mobIndex, x, y, string.Empty, generation);
-    }
-
-    public void SendMobDie(int mobIndex, double x, double y, string type, int generation = 0)
-    {
         if (_role != NetRole.Client && _role != NetRole.Host)
             return;
         if (!HasAnyConnection())
@@ -560,10 +555,9 @@ public sealed partial class NetNode
         if (ID <= 0)
             return;
 
-        var safeType = type ?? string.Empty;
-        var payload = string.IsNullOrWhiteSpace(safeType)
-            ? string.Create(CultureInfo.InvariantCulture, $"MOBDIE|{ID}|{mobIndex}|{x}|{y}|{generation}")
-            : string.Create(CultureInfo.InvariantCulture, $"MOBDIE|{ID}|{mobIndex}|{x}|{y}|{generation}|{safeType}");
+        var payload = string.Create(
+            CultureInfo.InvariantCulture,
+            $"MOBDIE|{ID}|{mobIndex}|{x}|{y}|{generation}");
         SendRaw(payload);
     }
 
@@ -728,45 +722,28 @@ public sealed partial class NetNode
         SendRaw($"INTERPORTAL|{action}|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}");
     }
 
-    public void SendInterGenericActivate(double x, double y, string typeName)
+
+    public void SendLobbyState(string username, string levelId, int seed, string progressSignature)
     {
         if (!HasAnyConnection())
             return;
-        if (ID <= 0)
-            return;
 
-        var safeType = (typeName ?? string.Empty)
-            .Replace("|", "/", StringComparison.Ordinal)
-            .Replace("\r", string.Empty, StringComparison.Ordinal)
-            .Replace("\n", string.Empty, StringComparison.Ordinal)
-            .Trim();
-
-        SendRaw($"INTERGENACT|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{safeType}");
+        var safeUser = (username ?? "guest").Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        var safeLevel = (levelId ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        var safeProgress = (progressSignature ?? string.Empty).Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        var idPart = ID > 0 ? ID.ToString(CultureInfo.InvariantCulture) : "0";
+        SendRaw($"LOBBYSTATE|{idPart}|{safeUser}|{safeLevel}|{seed.ToString(CultureInfo.InvariantCulture)}|{safeProgress}");
     }
 
-    public void SendWorldObjectState(string levelId, string typeName, double x, double y, int flags)
+    public void SendRuneProgress(string csvPermanentIds)
     {
         if (!HasAnyConnection())
             return;
-        if (ID <= 0)
-            return;
-        if (string.IsNullOrWhiteSpace(levelId) || string.IsNullOrWhiteSpace(typeName) || flags <= 0)
+        if (string.IsNullOrWhiteSpace(csvPermanentIds))
             return;
 
-        var safeLevel = (levelId ?? string.Empty)
-            .Replace("|", "/", StringComparison.Ordinal)
-            .Replace("\r", string.Empty, StringComparison.Ordinal)
-            .Replace("\n", string.Empty, StringComparison.Ordinal)
-            .Trim();
-        var safeType = (typeName ?? string.Empty)
-            .Replace("|", "/", StringComparison.Ordinal)
-            .Replace("\r", string.Empty, StringComparison.Ordinal)
-            .Replace("\n", string.Empty, StringComparison.Ordinal)
-            .Trim();
-        if (string.IsNullOrWhiteSpace(safeLevel) || string.IsNullOrWhiteSpace(safeType))
-            return;
-
-        SendRaw($"WORLDOBJ|{safeLevel}|{safeType}|{x.ToString(CultureInfo.InvariantCulture)}|{y.ToString(CultureInfo.InvariantCulture)}|{flags.ToString(CultureInfo.InvariantCulture)}");
+        var safe = csvPermanentIds.Replace("|", "/").Replace("\r", string.Empty).Replace("\n", string.Empty);
+        SendRaw($"RUNEPROG|{safe}");
     }
 
     private void SendRaw(string payload)

@@ -907,10 +907,10 @@ namespace DeadCellsMultiplayerMod
                     return;
 
                 var typeName = cine.GetType().Name ?? string.Empty;
-                if (!IsBossDeathCinematicName(typeName))
+                if (!BossDeathCineTypeNames.Contains(typeName))
                     return;
 
-                ObserveRemoteBossDeathCineState(cine);
+                SuppressRemoteBossDeathCineState(cine);
             }
             catch
             {
@@ -919,274 +919,26 @@ namespace DeadCellsMultiplayerMod
 
         private bool ShouldSuppressRemoteBossDeathCineConstruction()
         {
-            // v6.0: do not suppress vanilla boss-death cinematics anymore. Suppressing them
-            // prevented the client from seeing/receiving boss reward-room state and could leave
-            // the player frozen until the exit failsafe moved them forward. Keep the hooks
-            // installed for compatibility, but let vanilla run and recover controls afterwards.
-            return false;
-        }
-
-        private static bool IsBossDeathCinematicName(string? typeName)
-        {
-            if (string.IsNullOrWhiteSpace(typeName))
-                return false;
-
-            var trimmed = typeName.Trim();
-            if (BossIntroCineTypeNames.Contains(trimmed) ||
-                trimmed.StartsWith("Enter", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("Start", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("Meet", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (BossDeathCineTypeNames.Contains(trimmed))
-                return true;
-
-            // Covers generated DLC/vanilla names not present in this proxy build, such as
-            // Concierge/TimeKeeper/Scarecrow/MamaTick-style death cinematics, without catching
-            // HeroDeath because those are filtered before this method is called.
-            return typeName.IndexOf("Death", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   typeName.IndexOf("Defeat", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   typeName.IndexOf("Kill", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private void ObserveRemoteBossDeathCineState(dc.GameCinematic? cine)
-        {
-            // Do not destroy/dispose the cine here: vanilla needs it to spawn boss rewards, unlock
-            // doors, and finish reward-room state. We only schedule an unstuck pass after a short
-            // grace delay, so the cinematic/reward setup has time to run first.
-            MarkBossVictoryRecoveryWindow("boss_death_cine_observed", 24.0, 3.0);
-        }
-
-        private void TryScheduleBossVictoryRecoveryFromBossDeath()
-        {
-            if (_netRole != NetRole.Client || _net == null || !_net.IsAlive)
-                return;
-
-            var currentLevelId = GetCurrentLevelId();
-            if (!IsBossLevel(currentLevelId))
-                return;
-
-            if (_bossVictoryRecoveryUntilTicks != 0)
-                return;
-
-            var hero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
-            var level = hero?._level;
-            if (hero == null || level == null)
-                return;
-
-            if (!string.Equals(_bossDeathPollLevelId, currentLevelId, StringComparison.OrdinalIgnoreCase))
-            {
-                _bossDeathPollLevelId = currentLevelId;
-                _bossDeathPollSawLiveBoss = false;
-                _bossDeathPollGoneSinceTicks = 0;
-            }
-
-            if (TryGetCurrentBossDeathCinematicName(out _))
-            {
-                MarkBossVictoryRecoveryWindow("boss_death_cine_polling_fallback", 45.0, 2.0);
-                return;
-            }
-
-            var hasBossObject = false;
-            var bossAlive = false;
-            try
-            {
-                var boss = level.boss;
-                if (boss != null)
-                {
-                    hasBossObject = true;
-                    bossAlive = !boss.destroyed && boss.life > 0;
-                }
-            }
-            catch
-            {
-            }
-
-            if (bossAlive)
-            {
-                _bossDeathPollSawLiveBoss = true;
-                _bossDeathPollGoneSinceTicks = 0;
-                return;
-            }
-
-            if (!_bossDeathPollSawLiveBoss)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-            if (_bossDeathPollGoneSinceTicks == 0)
-            {
-                _bossDeathPollGoneSinceTicks = now;
-                return;
-            }
-
-            if (now - _bossDeathPollGoneSinceTicks < (long)(Stopwatch.Frequency * (hasBossObject ? 0.25 : 0.75)))
-                return;
-
-            MarkBossVictoryRecoveryWindow("boss_dead_polling_fallback", 45.0, 2.0);
-        }
-
-        private bool TryGetCurrentBossDeathCinematicName(out string typeName)
-        {
-            typeName = string.Empty;
-            try
-            {
-                var game = dc.pr.Game.Class.ME;
-                var cine = game?.curCine;
-                if (cine == null || cine.destroyed)
-                    return false;
-
-                if (cine is DeadBase || cine is RemoteDownedCorpse)
-                    return false;
-                if (cine is HeroDeath || cine is HeroDeathBase || cine is HeroDeathContinue ||
-                    cine is HeroDeathRespawn || cine is HeroDeathDLCP)
-                    return false;
-
-                typeName = cine.GetType().Name ?? string.Empty;
-                return IsBossDeathCinematicName(typeName);
-            }
-            catch
-            {
-                return false;
-            }
+            return _netRole == NetRole.Client && _net != null && _net.IsAlive;
         }
 
         private void SuppressRemoteBossDeathCineState(dc.GameCinematic? cine)
         {
-            // Kept as a compatibility shim for existing hook methods. In v6.0 this no longer
-            // suppresses the cine; it observes it and lets vanilla reward logic continue.
-            ObserveRemoteBossDeathCineState(cine);
-        }
-
-        private void MarkBossVictoryRecoveryWindow(string reason, double seconds)
-        {
-            MarkBossVictoryRecoveryWindow(reason, seconds, 0.0);
-        }
-
-        private void MarkBossVictoryRecoveryWindow(string reason, double seconds, double delaySeconds)
-        {
-            var now = Stopwatch.GetTimestamp();
-            var durationTicks = (long)(Stopwatch.Frequency * System.Math.Max(1.0, seconds));
-            var delayTicks = (long)(Stopwatch.Frequency * System.Math.Max(0.0, delaySeconds));
-            _bossVictoryRecoveryUntilTicks = now + durationTicks;
-            _bossVictoryRecoveryUnlockAfterTicks = now + delayTicks;
-            _nextBossVictoryRecoveryTick = now + delayTicks;
-            _bossVictoryRecoveryReason = string.IsNullOrWhiteSpace(reason) ? "boss_victory" : reason.Trim();
-        }
-
-        private void MaintainBossVictoryUnstuckRecovery()
-        {
-            if (_bossVictoryRecoveryUntilTicks == 0)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-            if (now > _bossVictoryRecoveryUntilTicks)
-            {
-                _bossVictoryRecoveryUntilTicks = 0;
-                _bossVictoryRecoveryUnlockAfterTicks = 0;
-                _nextBossVictoryRecoveryTick = 0;
-                _bossVictoryRecoveryReason = string.Empty;
-                return;
-            }
-
-            if (_bossVictoryRecoveryUnlockAfterTicks != 0 && now < _bossVictoryRecoveryUnlockAfterTicks)
-                return;
-
-            if (now < _nextBossVictoryRecoveryTick)
-                return;
-
-            _nextBossVictoryRecoveryTick = now + (long)(Stopwatch.Frequency * 0.35);
-            RecoverLocalHeroAfterBossVictory(string.IsNullOrWhiteSpace(_bossVictoryRecoveryReason)
-                ? "boss_victory_recovery_window"
-                : _bossVictoryRecoveryReason);
-        }
-
-        private bool ShouldAllowBossVictoryRecoveryAtLevel(string? currentLevelId)
-        {
-            if (IsBossLevel(currentLevelId))
-                return true;
-
-            // Boss death often moves the client into a reward/transition room before controls are
-            // fully released. Do not cancel an active boss-recovery window just because the level
-            // id changed from e.g. Bridge/Throne to a T_* transition area.
-            return _bossVictoryRecoveryUntilTicks != 0;
-        }
-
-        private void RecoverLocalHeroAfterBossVictory(string reason)
-        {
-            if (_netRole == NetRole.None || _net == null || !_net.IsAlive)
-                return;
-
-            var hero = me ?? ModCore.Modules.Game.Instance?.HeroInstance;
-            if (hero == null)
-                return;
-
-            var currentLevelId = GetCurrentLevelId();
-            if (!ShouldAllowBossVictoryRecoveryAtLevel(currentLevelId))
-                return;
-
             try
             {
                 var game = dc.pr.Game.Class.ME;
-                var cine = game?.curCine;
-                if (cine is HeroDeath || cine is HeroDeathBase || cine is HeroDeathContinue ||
-                    cine is HeroDeathRespawn || cine is HeroDeathDLCP)
-                {
-                    game!.curCine = null;
-                    try { cine.destroy(); } catch { }
-                    try { cine.disposeImmediately(); } catch { }
-                }
+                if (game != null && cine != null && ReferenceEquals(game.curCine, cine))
+                    game.curCine = null;
             }
             catch
             {
             }
 
-            if (_localFakeDead)
-            {
-                ResetFakeDeathState(
-                    unlockLocalHero: true,
-                    sendNetworkUpState: true,
-                    clearRemoteDownedTracking: false,
-                    clearDownedAnnouncements: false);
-            }
-
-            try
-            {
-                if (hero.life <= 0)
-                    hero.life = 1;
-            }
-            catch
-            {
-            }
-
-            try { StopLocalDeadCine(); } catch { }
-            if (IsHeroRuntimeSafeForControlUnlock(hero))
-            {
-                try { hero.cancelVelocities(); } catch { }
-                try { hero.cancelSkillControlLock(); } catch { }
-                try { hero.unlockControls(); } catch { }
-                try { hero._targetable = true; } catch { }
-            }
-
-            try
-            {
-                var data = hero._level?.game?.data;
-                if (data != null)
-                    data.stopGameTime = false;
-            }
-            catch
-            {
-            }
-
-            _postReviveLockUntilTicks = 0;
-            _nextDownedStateSendTicks = 0;
-
-            try
-            {
-                Logger.Information("[BossSync] Applied local boss-victory unstuck recovery reason={Reason} level={LevelId}", reason, currentLevelId);
-            }
-            catch
-            {
-            }
+            try { cine?.destroy(); } catch { }
+            try { cine?.disposeImmediately(); } catch { }
+            try { me?.cancelSkillControlLock(); } catch { }
+            try { me?.unlockControls(); } catch { }
+            EnsureHeroVisibilityAfterRoomChange(me);
         }
 
         private void Hook__BeholderDeath__constructor__(Hook__BeholderDeath.orig___constructor__ orig, BeholderDeath e, Beholder boss)

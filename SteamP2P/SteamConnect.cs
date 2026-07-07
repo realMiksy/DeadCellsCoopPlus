@@ -418,12 +418,7 @@ namespace DeadCellsMultiplayerMod
             if (codeMatch.Success)
             {
                 lobbyCode = NormalizeLobbyCode(codeMatch.Value);
-                // DCCM lobby codes are not random: they are the Steam lobby id encoded in base36
-                // with a dc prefix. Decode locally first so joining does not depend on Steam's
-                // public lobby-list search, which can lag or fail to return cross-region/private
-                // lobbies even when the lobby id itself is valid.
-                if (TryDecodeLobbyCodeToLobbyId(lobbyCode, out var decodedLobbyId))
-                    lobbyId = decodedLobbyId;
+                lobbyId = 0;
                 return true;
             }
 
@@ -439,46 +434,6 @@ namespace DeadCellsMultiplayerMod
             if (!normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal))
                 return string.Concat(LobbyCodePrefix, normalized);
             return normalized;
-        }
-
-        private static bool TryDecodeLobbyCodeToLobbyId(string? rawCode, out ulong lobbyId)
-        {
-            lobbyId = 0UL;
-
-            var normalized = NormalizeLobbyCode(rawCode);
-            if (string.IsNullOrWhiteSpace(normalized) ||
-                !normalized.StartsWith(LobbyCodePrefix, StringComparison.Ordinal) ||
-                normalized.Length <= LobbyCodePrefix.Length)
-            {
-                return false;
-            }
-
-            var value = 0UL;
-            for (var i = LobbyCodePrefix.Length; i < normalized.Length; i++)
-            {
-                var ch = normalized[i];
-                int digit;
-                if (ch >= '0' && ch <= '9')
-                    digit = ch - '0';
-                else if (ch >= 'a' && ch <= 'z')
-                    digit = 10 + ch - 'a';
-                else
-                    return false;
-
-                if (digit < 0 || digit >= 36)
-                    return false;
-
-                if (value > (ulong.MaxValue - (ulong)digit) / 36UL)
-                    return false;
-
-                value = (value * 36UL) + (ulong)digit;
-            }
-
-            if (value == 0UL)
-                return false;
-
-            lobbyId = value;
-            return true;
         }
 
         private static bool TryRunHostWorker(WorkerRequest request, out WorkerResponse response)
@@ -1078,14 +1033,8 @@ namespace DeadCellsMultiplayerMod
 
             if (!string.IsNullOrWhiteSpace(requestedCode))
             {
-                if (TryDecodeLobbyCodeToLobbyId(requestedCode, out var decodedLobbyId))
-                {
-                    targetLobbyId = decodedLobbyId;
-                }
-                else if (TryResolveLobbyIdByCode(requestedCode, out var resolvedLobbyId, out _))
-                {
+                if (TryResolveLobbyIdByCode(requestedCode, out var resolvedLobbyId, out _))
                     targetLobbyId = resolvedLobbyId;
-                }
             }
 
             if (targetLobbyId == 0)
@@ -1095,7 +1044,7 @@ namespace DeadCellsMultiplayerMod
                     Success = false,
                     Error = string.IsNullOrWhiteSpace(requestedCode)
                         ? "Steam lobby id is invalid"
-                        : "Steam lobby code is invalid or could not be decoded"
+                        : "Steam lobby code does not exist"
                 };
             }
 
@@ -1274,12 +1223,6 @@ namespace DeadCellsMultiplayerMod
                 return false;
             }
 
-            if (TryDecodeLobbyCodeToLobbyId(normalizedCode, out var decodedLobbyId))
-            {
-                lobbyId = decodedLobbyId;
-                return true;
-            }
-
             SteamMatchmaking.AddRequestLobbyListStringFilter(
                 ModMarkerLobbyKey,
                 ModMarkerLobbyValue,
@@ -1395,6 +1338,28 @@ namespace DeadCellsMultiplayerMod
                 return 1234;
             return port;
         }
+
+        internal static bool TryOpenInviteOverlay(ulong lobbyId, out string error)
+        {
+            error = string.Empty;
+            if (lobbyId == 0UL)
+            {
+                error = "No Steam lobby is active yet";
+                return false;
+            }
+
+            try
+            {
+                SteamFriends.ActivateGameOverlayInviteDialog(new CSteamID(lobbyId));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
 
         internal static string ResolveBestHostIp()
         {

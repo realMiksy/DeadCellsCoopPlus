@@ -78,10 +78,9 @@ namespace DeadCellsMultiplayerMod
 
         private void EnsureCorpse()
         {
-            // v6.4.5: corpse-less fake-death. Do not create HeroDeadCorpse here.
-            // The vanilla corpse entity can run lethal-fall/drop logic and can duplicate cells or
-            // blueprints when a downed player is repeatedly snapped out of spikes/void.
-            DisposeCorpse();
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+                CreateCorpse();
         }
 
         private void EnsureHomunculus()
@@ -92,9 +91,31 @@ namespace DeadCellsMultiplayerMod
 
         private void CreateCorpse()
         {
-            // v6.4.5: disabled physical HeroDeadCorpse creation for multiplayer fake-death.
             DisposeCorpse();
             DisposeHomunculus();
+
+            if (!IsSafeToCreateCorpse())
+                return;
+
+            try
+            {
+                var corpse = new HeroDeadCorpse(this, _hero);
+                corpse.init();
+                _corpse = corpse;
+                _lethalFallStarted = false;
+                _hasBossArenaCorpseAnchor = false;
+                _bossArenaCorpseAnchorX = 0;
+                _bossArenaCorpseAnchorY = 0;
+                _bossArenaCorpsePushApplied = false;
+                _bossArenaCorpsePushStartedTicks = 0;
+                TrySnapCorpseToHeroAnchor(corpse);
+                TryApplyBossArenaCorpsePush(corpse);
+                EnsureLethalFallStarted();
+            }
+            catch
+            {
+                _corpse = null;
+            }
         }
 
         private bool IsSafeToCreateCorpse()
@@ -120,8 +141,13 @@ namespace DeadCellsMultiplayerMod
 
         private void EnsureCorpseFalling()
         {
-            // v6.4.5: no physical corpse simulation while fake-dead.
-            DisposeCorpse();
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
+                return;
+
+            KeepCorpseActive(corpse);
+            KeepBossArenaCorpseAnchored(corpse);
+            EnsureLethalFallStarted();
         }
 
         private void EnsureLethalFallStarted()
@@ -387,53 +413,40 @@ namespace DeadCellsMultiplayerMod
             try { corpse.onOutOfGameChange(); } catch { }
         }
 
-        public void SnapCorpseToPixel(double x, double y, bool clampToGround = true)
-        {
-            // v6.4.5: the local downed marker is the hidden hero anchor, not a physics corpse.
-            if (_hero == null || _hero.destroyed)
-                return;
-
-            try { _hero.cancelVelocities(); } catch { }
-            try { _hero.setPosPixel(x, y); } catch { }
-        }
-
         public bool TryGetCorpsePixelPosition(out double x, out double y)
         {
             x = 0;
             y = 0;
 
-            var hero = _hero;
-            if (hero == null || hero.destroyed)
+            var corpse = _corpse;
+            if (corpse == null || corpse.destroyed)
                 return false;
 
             try
             {
-                x = hero.get_targetSprPosX();
-                y = hero.get_targetSprPosY();
-                return double.IsFinite(x) && double.IsFinite(y);
+                // Use physics-driven target coordinates so hero follows corpse reliably
+                // even when sprite position is temporarily unavailable or delayed.
+                x = corpse.get_targetSprPosX();
+                y = corpse.get_targetSprPosY();
+                return true;
             }
             catch
             {
             }
 
-            try
+            var sprite = corpse.spr;
+            if (sprite != null)
             {
-                if (hero.spr != null)
-                {
-                    x = hero.spr.x;
-                    y = hero.spr.y;
-                    return double.IsFinite(x) && double.IsFinite(y);
-                }
-            }
-            catch
-            {
+                x = sprite.x;
+                y = sprite.y;
+                return true;
             }
 
             try
             {
-                x = (hero.cx + hero.xr) * 24.0;
-                y = (hero.cy + hero.yr) * 24.0;
-                return double.IsFinite(x) && double.IsFinite(y);
+                x = (corpse.cx + corpse.xr) * 24.0;
+                y = (corpse.cy + corpse.yr) * 24.0;
+                return true;
             }
             catch
             {

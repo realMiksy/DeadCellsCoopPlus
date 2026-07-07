@@ -55,10 +55,6 @@ public sealed partial class NetNode
         try { _client?.Close(); } catch { }
         try { _listener?.Stop(); } catch { }
         try { _steamTransportTask?.Wait(400); } catch { }
-        if (_useSteamTransport && _role == NetRole.Host)
-        {
-            try { TryClearSteamRichPresence(); } catch { }
-        }
         GameDataSync.Seed = 0;
         lock (_hostCacheSync)
         {
@@ -94,17 +90,6 @@ public sealed partial class NetNode
             _pendingBossHeroTeleports.Clear();
             _pendingPlayerDownStates.Clear();
             _pendingPlayerReviveRequests.Clear();
-            _pendingInterDoorEvents.Clear();
-            _pendingInterElevatorEvents.Clear();
-            _pendingInterPressurePlateEvents.Clear();
-            _pendingInterTreasureChestEvents.Clear();
-            _pendingInterVineLadderEvents.Clear();
-            _pendingInterTeleportEvents.Clear();
-            _pendingInterBreakableGroundEvents.Clear();
-            _pendingBossRuneUpdateCells.Clear();
-            _pendingInterPortalEvents.Clear();
-            _pendingInterGenericActivateEvents.Clear();
-            _pendingWorldObjectStates.Clear();
         }
         _stream = null; _client = null; _listener = null;
         try { _sendLock.Dispose(); } catch { }

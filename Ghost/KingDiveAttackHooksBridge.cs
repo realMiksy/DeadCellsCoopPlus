@@ -203,7 +203,7 @@ public partial class ModEntry
         try
         {
             original = level.listCurrentQuadElements;
-            if (!TrySanitizeQuadElements(level, original, out sanitized))
+            if (!TrySanitizeQuadElements(original, out sanitized))
             {
                 action();
                 return;
@@ -229,7 +229,7 @@ public partial class ModEntry
         }
     }
 
-    private static bool TrySanitizeQuadElements(Level level, ArrayObj? source, out ArrayObj? sanitized)
+    private static bool TrySanitizeQuadElements(ArrayObj? source, out ArrayObj? sanitized)
     {
         sanitized = null;
         if (source == null)
@@ -252,7 +252,7 @@ public partial class ModEntry
 
             if (entry is dc.Entity entity)
             {
-                if (IsEntityQuadHitSafe(level, entity))
+                if (IsEntityQuadHitSafe(entity))
                 {
                     arr.array.pushDyn(entity);
                     continue;
@@ -273,70 +273,12 @@ public partial class ModEntry
     }
 
     /// <summary>
-    /// Skip entities whose position, level, life or sprite metadata would crash vanilla hit resolution
-    /// (<c>applyAttackResult</c>). DLC rooms can leave stale/half-destroyed mobs in
-    /// <c>listCurrentQuadElements</c>; vanilla dive landing later dereferences fields such as
-    /// <c>cx</c> on those entries and raises Hashlink <c>Null access .cx</c>.
+    /// Skip entities whose sprite/group metadata would crash vanilla hit resolution (<c>applyAttackResult</c>).
     /// </summary>
-    private static bool IsEntityQuadHitSafe(Level level, dc.Entity entity)
+    private static bool IsEntityQuadHitSafe(dc.Entity entity)
     {
-        if (entity == null || level == null)
+        if (entity == null)
             return false;
-
-        try
-        {
-            if (entity.destroyed)
-                return false;
-        }
-        catch
-        {
-            return false;
-        }
-
-        try
-        {
-            if (entity._level == null)
-                return false;
-        }
-        catch
-        {
-            return false;
-        }
-
-        try
-        {
-            _ = entity.cx;
-            _ = entity.cy;
-            _ = entity.xr;
-            _ = entity.yr;
-        }
-        catch
-        {
-            return false;
-        }
-
-        try
-        {
-            if (!entity._targetable)
-                return false;
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (entity is Mob mob)
-        {
-            try
-            {
-                if (mob.life <= 0 || mob.destroyed || mob._level == null)
-                    return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
 
         try
         {

@@ -57,12 +57,6 @@ public class LevelExitSync :
     private const double CircleAlphaIdle = 0.10;
     private const double CircleAlphaActive = 0.22;
     private const int PointerFxSuppressionKey = 188743680;
-    private const double ForceExitCountdownSeconds = 15.0;
-    private const double BossForceExitCountdownSeconds = 45.0;
-    private const double ForceExitNoticeIntervalSeconds = 5.0;
-    private const double RemoteExitAssistSeconds = 2.0;
-    private const double RemoteExitAssistRadiusPx = 260.0;
-    private static readonly double RemoteExitAssistRadiusSq = RemoteExitAssistRadiusPx * RemoteExitAssistRadiusPx;
 
     private readonly ILogger _log;
 
@@ -93,13 +87,9 @@ public class LevelExitSync :
     private bool _suppressDoorActivateHook;
     private string _transitionDoorKey = string.Empty;
     private bool _timerPausedByExit;
-    private string _forceExitDoorKey = string.Empty;
-    private long _forceExitCountdownStartedTick;
-    private long _nextForceExitNoticeTick;
-    private bool _forceExitTriggered;
-    private string _remoteExitAssistDoorKey = string.Empty;
-    private long _remoteExitAssistStartedTick;
-    private bool _remoteExitAssistTriggered;
+    private string _exitFailsafeDoorKey = string.Empty;
+    private long _exitFailsafeStartedTicks;
+    private const double ExitFailsafeTeleportSeconds = 8.0;
 
     /// <summary>Exit/portal/boss-door entities only — avoids scanning <c>level.entities</c> every hero frame.</summary>
     private readonly List<Entity?> _exitTargetCandidates = new();
@@ -137,6 +127,7 @@ public class LevelExitSync :
         Hook_Exit.postUpdate += Hook_Exit_postUpdate;
         Hook_Exit.onActivate += Hook_Exit_onActivate;
         Hook_Portal.onActivate += Hook_Portal_onActivate;
+        Hook_BossRushDoor.onActivate += Hook_BossRushDoor_onActivate;
         Hook_Level.registerEntity += Hook_Level_registerEntity;
         Hook_Level.unregisterEntity += Hook_Level_unregisterEntity;
         Hook_Level.onDispose += Hook_Level_onDispose;
@@ -162,6 +153,15 @@ public class LevelExitSync :
             target => SafeRead(() => target.visible, false));
     }
 
+    private void Hook_BossRushDoor_onActivate(Hook_BossRushDoor.orig_onActivate orig, BossRushDoor self, Hero by, bool cine)
+    {
+        HandleExitTargetActivate(
+            self,
+            by,
+            () => orig(self, by, cine),
+            target => !SafeRead(() => target.locked, true));
+    }
+
     private void Hook_Level_registerEntity(Hook_Level.orig_registerEntity orig, Level self, Entity clid)
     {
         orig(self, clid);
@@ -176,6 +176,10 @@ public class LevelExitSync :
 
     private void Hook_Level_onDispose(Hook_Level.orig_onDispose orig, Level self)
     {
+        var localLevel = ModEntry.me?._level;
+        if (localLevel != null && ReferenceEquals(localLevel, self))
+            ModEntry.PrepareRemoteKingsForLevelTransition("level-onDispose-current");
+
         if (ReferenceEquals(_exitCandidatesLevel, self))
         {
             _exitCandidatesLevel = null;
@@ -301,8 +305,7 @@ public class LevelExitSync :
         UpdateLocalPlayerState(net, forceSend: false);
         ApplyLocalTimerPause(_localPressed && _localInsideCircle);
         RefreshDoorVisuals(net);
-        UpdateForceExitCountdown(net, currentLevel, hero, nearestTarget);
-        UpdateRemoteExitAssist(net, currentLevel, hero, nearestTarget);
+        TryExitTeleportFailsafe(hero, currentLevel, net);
 
         if (_localPressed &&
             _localInsideCircle &&
@@ -329,239 +332,73 @@ public class LevelExitSync :
         UpdateExitPointer(net);
     }
 
-    private void UpdateForceExitCountdown(NetNode net, Level? currentLevel, Hero hero, Entity? nearestTarget)
+
+    private void TryExitTeleportFailsafe(Hero hero, Level? level, NetNode net)
     {
-        if (net == null || !net.IsAlive || hero == null)
-        {
-            ResetForceExitCountdown(showCancelMessage: false);
+        if (hero == null || level == null || net == null || !net.IsAlive)
             return;
-        }
-
-        var doorKey = ResolveWatchedDoorKey(net);
-        if (string.IsNullOrWhiteSpace(doorKey))
-        {
-            ResetForceExitCountdown(showCancelMessage: false);
-            return;
-        }
-
-        if (AreAllPlayersReadyForDoor(doorKey, net))
-        {
-            ResetForceExitCountdown(showCancelMessage: false);
-            return;
-        }
-
-        if (!HasAnyPlayerReadyForDoor(doorKey, net.id))
-        {
-            ResetForceExitCountdown(showCancelMessage: false);
-            return;
-        }
-
-        var target = FindExitTargetByDoorKey(currentLevel, doorKey);
-        if (target == null && nearestTarget != null && string.Equals(BuildDoorKey(nearestTarget.cx, nearestTarget.cy), doorKey, StringComparison.Ordinal))
-            target = nearestTarget;
-
-        if (target == null || !IsAvailableExitTarget(target))
-        {
-            ResetForceExitCountdown(showCancelMessage: false);
-            return;
-        }
-
-        var countdownSeconds = ResolveForceExitCountdownSeconds(currentLevel);
-        var now = Stopwatch.GetTimestamp();
-        if (!string.Equals(_forceExitDoorKey, doorKey, StringComparison.Ordinal) || _forceExitCountdownStartedTick == 0)
-        {
-            _forceExitDoorKey = doorKey;
-            _forceExitCountdownStartedTick = now;
-            _nextForceExitNoticeTick = now;
-            _forceExitTriggered = false;
-            PushForceExitCountdownMessage(net, target, countdownSeconds);
-            _nextForceExitNoticeTick = now + (long)(Stopwatch.Frequency * ForceExitNoticeIntervalSeconds);
-            return;
-        }
-
-        var elapsedSeconds = (now - _forceExitCountdownStartedTick) / (double)Stopwatch.Frequency;
-        var remainingSeconds = countdownSeconds - elapsedSeconds;
-        if (!_forceExitTriggered && remainingSeconds > 0 && now >= _nextForceExitNoticeTick)
-        {
-            PushForceExitCountdownMessage(net, target, remainingSeconds);
-            _nextForceExitNoticeTick = now + (long)(Stopwatch.Frequency * ForceExitNoticeIntervalSeconds);
-        }
-
-        if (_forceExitTriggered || elapsedSeconds < countdownSeconds)
-            return;
-
-        _forceExitTriggered = true;
-        MultiplayerUI.PushSystemMessage(FormatLocalized("Exit failsafe activated. Moving everyone to {0}.", ResolveExitDestinationName(target)));
-        ApplyLocalTimerPause(false);
-        TriggerExitTransition(target, hero, null);
-    }
-
-    private static double ResolveForceExitCountdownSeconds(Level? currentLevel)
-    {
-        try
-        {
-            var levelId = currentLevel?.map?.id?.ToString();
-            if (DeadCellsMultiplayerMod.ModEntry.IsBossLevel(levelId))
-                return BossForceExitCountdownSeconds;
-        }
-        catch
-        {
-        }
-
-        return ForceExitCountdownSeconds;
-    }
-
-    private void UpdateRemoteExitAssist(NetNode net, Level? currentLevel, Hero hero, Entity? nearestTarget)
-    {
-        if (net == null || !net.IsAlive || hero == null || ModEntry.IsLocalPlayerDowned())
-        {
-            ResetRemoteExitAssist();
-            return;
-        }
-
         if (_localPressed && _localInsideCircle)
         {
-            ResetRemoteExitAssist();
+            _exitFailsafeDoorKey = string.Empty;
+            _exitFailsafeStartedTicks = 0;
             return;
         }
 
-        var doorKey = ResolveWatchedDoorKey(net);
-        if (string.IsNullOrWhiteSpace(doorKey) || !HasAnyPlayerReadyForDoor(doorKey, net.id))
+        string candidateKey = string.Empty;
+        foreach (var state in _playerStates.Values)
         {
-            ResetRemoteExitAssist();
-            return;
+            if (state == null || state.UserId <= 0)
+                continue;
+            if (!state.Pressed || !state.InsideCircle || string.IsNullOrWhiteSpace(state.DoorKey))
+                continue;
+            if (IsPlayerDownedForExit(state.UserId, net.id))
+                continue;
+            candidateKey = state.DoorKey;
+            break;
         }
 
-        var target = FindExitTargetByDoorKey(currentLevel, doorKey);
-        if (target == null && nearestTarget != null && string.Equals(BuildDoorKey(nearestTarget.cx, nearestTarget.cy), doorKey, StringComparison.Ordinal))
-            target = nearestTarget;
-        if (target == null || !IsAvailableExitTarget(target))
+        if (string.IsNullOrWhiteSpace(candidateKey))
         {
-            ResetRemoteExitAssist();
+            _exitFailsafeDoorKey = string.Empty;
+            _exitFailsafeStartedTicks = 0;
             return;
         }
 
-        if (!IsHeroNearOrStuckAtExit(hero, target))
+        var target = FindExitTargetByDoorKey(level, candidateKey);
+        if (target == null)
+            return;
+
+        if (!string.Equals(_exitFailsafeDoorKey, candidateKey, StringComparison.Ordinal))
         {
-            ResetRemoteExitAssist();
+            _exitFailsafeDoorKey = candidateKey;
+            _exitFailsafeStartedTicks = Stopwatch.GetTimestamp();
             return;
         }
 
-        var now = Stopwatch.GetTimestamp();
-        if (!string.Equals(_remoteExitAssistDoorKey, doorKey, StringComparison.Ordinal) || _remoteExitAssistStartedTick == 0)
-        {
-            _remoteExitAssistDoorKey = doorKey;
-            _remoteExitAssistStartedTick = now;
-            _remoteExitAssistTriggered = false;
-            try { MultiplayerUI.PushSystemMessage(Localize("Exit assist: teammate entered the exit. Pulling you in.")); } catch { }
-        }
-
-        _localDoorKey = doorKey;
-        _localDoorCx = target.cx;
-        _localDoorCy = target.cy;
-        _localDoorOutOfGame = SafeRead(() => target.isOutOfGame, false);
-        _localDoorOnScreen = SafeRead(() => target.isOnScreen, false);
-        _localInsideCircle = true;
-        _localPressed = true;
-        UpdateLocalPlayerState(net, forceSend: true);
-
-        var elapsedSeconds = (now - _remoteExitAssistStartedTick) / (double)Stopwatch.Frequency;
-        var allReady = AreAllPlayersReadyForDoor(doorKey, net);
-
-        // Do not let a client jump into the next level before the host has had time to receive
-        // this ready packet. That early local transition was a major cause of boss/level desync.
-        if (net.IsHost && allReady)
-        {
-            ApplyLocalTimerPause(false);
-            TriggerExitTransition(target, hero, null);
+        var elapsed = Stopwatch.GetElapsedTime(_exitFailsafeStartedTicks).TotalSeconds;
+        if (elapsed < ExitFailsafeTeleportSeconds)
             return;
-        }
-
-        if (_remoteExitAssistTriggered || elapsedSeconds < RemoteExitAssistSeconds || !allReady)
-            return;
-
-        _remoteExitAssistTriggered = true;
-        ApplyLocalTimerPause(false);
-        TriggerExitTransition(target, hero, null);
-    }
-
-    private void ResetRemoteExitAssist()
-    {
-        _remoteExitAssistDoorKey = string.Empty;
-        _remoteExitAssistStartedTick = 0;
-        _remoteExitAssistTriggered = false;
-    }
-
-    private static bool IsHeroNearOrStuckAtExit(Hero hero, Entity target)
-    {
-        if (hero == null || target == null)
-            return false;
 
         try
         {
-            var heroX = hero.spr?.x ?? ((hero.cx + hero.xr) * 24.0);
-            var heroY = hero.spr?.y ?? ((hero.cy + hero.yr) * 24.0);
-            var targetX = target.spr?.x ?? ((target.cx + target.xr) * 24.0);
-            var targetY = target.spr?.y ?? ((target.cy + target.yr) * 24.0);
-            if (!double.IsFinite(heroX) || !double.IsFinite(heroY) || !double.IsFinite(targetX) || !double.IsFinite(targetY))
-                return false;
-
-            var dx = heroX - targetX;
-            var dy = heroY - targetY;
-            if (dx * dx + dy * dy <= RemoteExitAssistRadiusSq)
-                return true;
-
-            // Some exits/transition doors trap the client just below the activation trigger
-            // when the other player starts the transition. Treat that as "close enough" and
-            // pull the client through instead of leaving them wedged under the trigger.
-            return System.Math.Abs(dx) <= 160.0 && dy >= -48.0 && dy <= 420.0;
+            var x = GetEntityX(target);
+            var y = GetEntityY(target);
+            hero.cancelVelocities();
+            hero.setPosPixel(x, y);
+            _localDoorKey = candidateKey;
+            _localDoorCx = target.cx;
+            _localDoorCy = target.cy;
+            _localInsideCircle = true;
+            _localPressed = true;
+            UpdateLocalPlayerState(net, forceSend: true);
+            MultiplayerUI.PushSystemMessage(FormatLocalized("Exit failsafe: pulled you to {0}", ResolveExitDestinationName(target)), 6.0, 1.5);
+            _exitFailsafeStartedTicks = Stopwatch.GetTimestamp();
+            MarkExitUiStateDirty();
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            _log.Warning("[ExitSync] Exit teleport failsafe failed: {Message}", ex.Message);
         }
-    }
-
-    private void ResetForceExitCountdown(bool showCancelMessage)
-    {
-        if (showCancelMessage && _forceExitCountdownStartedTick != 0)
-            MultiplayerUI.PushSystemMessage(Localize("Exit failsafe cancelled."));
-
-        _forceExitDoorKey = string.Empty;
-        _forceExitCountdownStartedTick = 0;
-        _nextForceExitNoticeTick = 0;
-        _forceExitTriggered = false;
-        ResetRemoteExitAssist();
-    }
-
-    private bool HasAnyPlayerReadyForDoor(string doorKey, int localId)
-    {
-        if (string.IsNullOrWhiteSpace(doorKey))
-            return false;
-
-        foreach (var state in _playerStates.Values)
-        {
-            if (state.UserId <= 0)
-                continue;
-            if (IsPlayerDownedForExit(state.UserId, localId))
-                continue;
-            if (!state.Pressed || !state.InsideCircle)
-                continue;
-            if (string.Equals(state.DoorKey, doorKey, StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
-    }
-
-    private void PushForceExitCountdownMessage(NetNode net, Entity target, double secondsRemaining)
-    {
-        var seconds = (int)System.Math.Ceiling(System.Math.Max(1.0, secondsRemaining));
-        var destination = ResolveExitDestinationName(target);
-        MultiplayerUI.PushSystemMessage(FormatLocalized(
-            "Exit failsafe: not everyone is ready. Forcing travel to {0} in {1}s.",
-            destination,
-            seconds));
     }
 
     private void TriggerExitTransition(Entity target, Hero hero, Action? origActivate)
@@ -573,6 +410,10 @@ public class LevelExitSync :
             ModEntry.ApplyLocalDownedExitPenaltyIfNeeded();
 
         _transitionDoorKey = BuildDoorKey(target.cx, target.cy);
+        ModEntry.PrepareRemoteKingsForLevelTransition(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"exit-activate:{target.GetType().Name}:{_transitionDoorKey}"));
         _suppressDoorActivateHook = true;
         try
         {
@@ -865,9 +706,9 @@ public class LevelExitSync :
                 return mapId.Trim();
         }
 
-        if (IsTypeName(target, "BossRushDoor"))
+        if (target is BossRushDoor bossDoor)
         {
-            var type = SafeRead(() => ReadDynamicMember(target, "bossRushType"), string.Empty);
+            var type = SafeRead(() => bossDoor.bossRushType?.ToString() ?? string.Empty, string.Empty);
             if (!string.IsNullOrWhiteSpace(type))
                 return type.Trim();
             return Localize("Boss Rush");
@@ -1008,7 +849,7 @@ public class LevelExitSync :
 
     private static bool IsSupportedExitTarget(Entity? entity)
     {
-        return entity is Exit || entity is Portal || IsTypeName(entity, "BossRushDoor");
+        return entity is Exit || entity is Portal || entity is BossRushDoor;
     }
 
     private static bool IsAvailableExitTarget(Entity? entity)
@@ -1017,7 +858,7 @@ public class LevelExitSync :
             return false;
         if (!SafeRead(() => entity!.visible, true))
             return false;
-        if (IsTypeName(entity, "BossRushDoor") && SafeRead(() => ReadDynamicBool(entity, "locked"), false))
+        if (entity is BossRushDoor bossDoor && SafeRead(() => bossDoor.locked, false))
             return false;
         return true;
     }
@@ -1519,11 +1360,6 @@ public class LevelExitSync :
         _hasCachedDownedSignature = false;
         _cachedDownedSignature = 0;
         _exitPointerDoorKey = string.Empty;
-        _forceExitDoorKey = string.Empty;
-        _forceExitCountdownStartedTick = 0;
-        _nextForceExitNoticeTick = 0;
-        _forceExitTriggered = false;
-        ResetRemoteExitAssist();
 
         _staleDoorVisualKeys.Clear();
         foreach (var key in _doorVisuals.Keys)
@@ -1637,58 +1473,6 @@ public class LevelExitSync :
     private static T SafeRead<T>(Func<T> getter, T fallback)
     {
         try { return getter(); } catch { return fallback; }
-    }
-
-    private static bool IsTypeName(object? value, string typeName)
-    {
-        if (value == null || string.IsNullOrWhiteSpace(typeName))
-            return false;
-
-        try
-        {
-            var type = value.GetType();
-            while (type != null)
-            {
-                if (string.Equals(type.Name, typeName, StringComparison.Ordinal) ||
-                    string.Equals(type.FullName, typeName, StringComparison.Ordinal) ||
-                    type.FullName?.EndsWith("." + typeName, StringComparison.Ordinal) == true)
-                    return true;
-                type = type.BaseType;
-            }
-        }
-        catch
-        {
-        }
-
-        return false;
-    }
-
-    private static string ReadDynamicMember(object? value, string memberName)
-    {
-        if (value == null || string.IsNullOrWhiteSpace(memberName))
-            return string.Empty;
-
-        try
-        {
-            var type = value.GetType();
-            var prop = type.GetProperty(memberName);
-            if (prop != null)
-                return prop.GetValue(value)?.ToString() ?? string.Empty;
-            var field = type.GetField(memberName);
-            if (field != null)
-                return field.GetValue(value)?.ToString() ?? string.Empty;
-        }
-        catch
-        {
-        }
-
-        return string.Empty;
-    }
-
-    private static bool ReadDynamicBool(object? value, string memberName)
-    {
-        var raw = ReadDynamicMember(value, memberName);
-        return bool.TryParse(raw, out var parsed) && parsed;
     }
 
     private void MarkExitUiStateDirty()

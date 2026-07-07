@@ -120,21 +120,6 @@ public readonly struct InterBossRuneUpdateCellsEvent
     }
 }
 
-
-public readonly struct InterGenericActivateEvent
-{
-    public readonly double X;
-    public readonly double Y;
-    public readonly string TypeName;
-
-    public InterGenericActivateEvent(double x, double y, string typeName)
-    {
-        X = x;
-        Y = y;
-        TypeName = typeName ?? string.Empty;
-    }
-}
-
 public readonly struct InterPortalEvent
 {
     public readonly double X;
@@ -146,34 +131,5 @@ public readonly struct InterPortalEvent
         X = x;
         Y = y;
         Action = action ?? string.Empty;
-    }
-}
-
-[System.Flags]
-public enum WorldObjectSyncFlags
-{
-    None = 0,
-    Consumed = 1,
-    Opened = 2,
-    Broken = 4,
-    Hidden = 8,
-    Important = 16
-}
-
-public readonly struct WorldObjectState
-{
-    public readonly string LevelId;
-    public readonly string TypeName;
-    public readonly double X;
-    public readonly double Y;
-    public readonly int Flags;
-
-    public WorldObjectState(string levelId, string typeName, double x, double y, int flags)
-    {
-        LevelId = levelId ?? string.Empty;
-        TypeName = typeName ?? string.Empty;
-        X = x;
-        Y = y;
-        Flags = flags;
     }
 }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Diagnostics;
-using dc;
 using dc.en;
 using dc.tool.atk;
 using dc.tool.mainSkills;
@@ -27,55 +26,10 @@ namespace DeadCellsMultiplayerMod
         private double _localDownedAnchorY;
         private const double DownedCorpseMaxDriftPx = 96.0;
         private const double DownedCorpseMaxDriftSq = DownedCorpseMaxDriftPx * DownedCorpseMaxDriftPx;
-        private bool _hasLocalReviveSafePosition;
-        private double _localReviveSafeX;
-        private double _localReviveSafeY;
-        private string _localReviveSafeLevelId = string.Empty;
-        private long _localReviveSafeTicks;
-        private bool _hasLocalReviveTeleporterPosition;
-        private double _localReviveTeleporterX;
-        private double _localReviveTeleporterY;
-        private string _localReviveTeleporterLevelId = string.Empty;
-        private long _localReviveTeleporterTicks;
-        private readonly List<ReviveSafeAnchor> _localReviveSafeHistory = new();
-        private const double ReviveSafePositionMaxAgeSeconds = 20.0;
-        private const double ReviveTeleporterMaxAgeSeconds = 900.0;
-        private const double ReviveSafeHistoryMinAgeSeconds = 1.25;
-        private const double ReviveSafeHistoryMaxAgeSeconds = 12.0;
-        private const int ReviveSafeHistoryMaxEntries = 36;
-        private const double DownedVoidRescueDropPx = 160.0;
-        private const double DownedUnsafeRescueCheckIntervalSeconds = 0.20;
-        private const double DownedSafeRescueLockSeconds = 6.0;
-        private const double DownedPermanentAnchorRefreshSeconds = 2.0;
-        private const double DownedParkedHeroYOffsetPx = 8.0;
-        private bool _localDownedHeroGravityWasCaptured;
-        private bool _localDownedHeroHadGravity;
-        private bool _localDownedHeroVisibilityWasCaptured;
-        private bool _localDownedHeroWasVisible;
-        private long _nextDownedSafeRescueCheckTicks;
-        private long _downedSafeRescueLockUntilTicks;
-        private double _downedSafeRescueLockX;
-        private double _downedSafeRescueLockY;
         private readonly HashSet<int> _scratchRemoteActiveIds = new();
         private readonly HashSet<int> _scratchActiveCorpseIds = new();
         private readonly List<int> _scratchStaleRemoteIds = new();
         private readonly List<int> _scratchStaleCorpseIds = new();
-
-        private readonly struct ReviveSafeAnchor
-        {
-            public readonly double X;
-            public readonly double Y;
-            public readonly string LevelId;
-            public readonly long Ticks;
-
-            public ReviveSafeAnchor(double x, double y, string levelId, long ticks)
-            {
-                X = x;
-                Y = y;
-                LevelId = levelId ?? string.Empty;
-                Ticks = ticks;
-            }
-        }
 
         private void Hook_Hero_onHeroDie(Hook_Hero.orig_onHeroDie orig, Hero self)
         {
@@ -204,26 +158,7 @@ namespace DeadCellsMultiplayerMod
                 if (_localFakeDead)
                     return;
 
-                // v5.8: cursed deaths are unsafe in vanilla multiplayer because the vanilla death
-                // flow can start controller/animation feedback cleanup before our fake-death hooks
-                // see it. If the hero appears cursed, go directly to fake death and never let the
-                // vanilla cursed-death path run.
-                if (IsHeroLikelyCursed(self))
-                {
-                    EnterLocalFakeDeath(self, net);
-                    return;
-                }
-
-                try
-                {
-                    orig(self, a);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warning(ex, "[NetMod][FakeDeath] Suppressed cursed death exception and entered fake death");
-                    EnterLocalFakeDeath(self, net);
-                    return;
-                }
+                orig(self, a);
 
                 if (_localFakeDead)
                     return;
@@ -237,90 +172,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             orig(self, a);
-        }
-
-        private static bool IsHeroLikelyCursed(Hero self)
-        {
-            if (self == null)
-                return false;
-
-            try
-            {
-                var t = self.GetType();
-                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance |
-                                                              System.Reflection.BindingFlags.Public |
-                                                              System.Reflection.BindingFlags.NonPublic;
-
-                foreach (var f in t.GetFields(flags))
-                {
-                    if (!LooksLikeCurseMemberName(f.Name))
-                        continue;
-                    if (MemberValueMeansCurseActive(f.GetValue(self)))
-                        return true;
-                }
-
-                foreach (var p in t.GetProperties(flags))
-                {
-                    if (!p.CanRead || !LooksLikeCurseMemberName(p.Name))
-                        continue;
-                    if (p.GetIndexParameters().Length != 0)
-                        continue;
-                    if (MemberValueMeansCurseActive(p.GetValue(self)))
-                        return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
-        private static bool LooksLikeCurseMemberName(string? name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-                return false;
-            return name.IndexOf("curse", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("cursed", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private static bool MemberValueMeansCurseActive(object? value)
-        {
-            try
-            {
-                switch (value)
-                {
-                    case null:
-                        return false;
-                    case bool b:
-                        return b;
-                    case byte v:
-                        return v > 0;
-                    case sbyte v:
-                        return v > 0;
-                    case short v:
-                        return v > 0;
-                    case ushort v:
-                        return v > 0;
-                    case int v:
-                        return v > 0;
-                    case uint v:
-                        return v > 0;
-                    case long v:
-                        return v > 0;
-                    case ulong v:
-                        return v > 0;
-                    case float v:
-                        return v > 0;
-                    case double v:
-                        return v > 0;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
         }
 
         private bool ShouldEnterFakeDeathFromEarlyDeathHook(Hero self, NetNode net)
@@ -518,8 +369,6 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            TrackLocalReviveSafePosition();
-            ContinueReviveRequestBurst(net);
             UpdateReviveHintsByProximity();
             ProcessReviveHold(net);
         }
@@ -552,8 +401,6 @@ namespace DeadCellsMultiplayerMod
                         }
 
                         _remoteDowned.Remove(state.UserId);
-                        if (_reviveBurstTargetId == state.UserId)
-                            ResetReviveBurst();
                         _downedAnnouncements.Remove(state.UserId);
                         DisposeRemoteDownedCine(state.UserId);
                         continue;
@@ -653,9 +500,9 @@ namespace DeadCellsMultiplayerMod
                     if (req.TargetId != localId)
                         continue;
 
-                    // v6.0: trust the reviver-side proximity/flask check. The downed player's
-                    // local DeadBase/homunculus object can be missing or desynced after boss/DLC
-                    // transitions, which made valid revive holds do nothing.
+                    if (_localDeadCine == null || !_localDeadCine.IsHomunculusNearCorpse(ReviveHomunculusBodyMaxDistancePx))
+                        continue;
+
                     ReviveLocalPlayer(net);
                     return;
                 }
@@ -873,169 +720,12 @@ namespace DeadCellsMultiplayerMod
             return false;
         }
 
-        private void CaptureLocalDownedStats(Hero hero)
-        {
-            if (hero == null)
-                return;
-
-            _localDownedStatsCaptured = true;
-            try { _localDownedSavedMaxLife = System.Math.Max(_localDownedSavedMaxLife, hero.maxLife); } catch { }
-            try { _localDownedSavedBrutalityTier = System.Math.Max(_localDownedSavedBrutalityTier, hero.brutalityTier); } catch { }
-            try { _localDownedSavedSurvivalTier = System.Math.Max(_localDownedSavedSurvivalTier, hero.survivalTier); } catch { }
-            try { _localDownedSavedTacticTier = System.Math.Max(_localDownedSavedTacticTier, hero.tacticTier); } catch { }
-            try { _localDownedSavedBonusLife = System.Math.Max(_localDownedSavedBonusLife, (int)System.Math.Round((double)hero.bonusLife)); } catch { }
-
-            try
-            {
-                var data = hero._level?.game?.data;
-                if (data != null)
-                {
-                    try { _localDownedSavedBrutalityTier = System.Math.Max(_localDownedSavedBrutalityTier, data.brutalityTier); } catch { }
-                    try { _localDownedSavedSurvivalTier = System.Math.Max(_localDownedSavedSurvivalTier, data.survivalTier); } catch { }
-                    try { _localDownedSavedTacticTier = System.Math.Max(_localDownedSavedTacticTier, data.tacticTier); } catch { }
-                }
-            }
-            catch { }
-        }
-
-        private void RestoreLocalDownedStats(Hero hero)
-        {
-            if (hero == null || !_localDownedStatsCaptured)
-                return;
-
-            try
-            {
-                if (_localDownedSavedMaxLife > 0 && hero.maxLife < _localDownedSavedMaxLife)
-                    hero.maxLife = _localDownedSavedMaxLife;
-            }
-            catch { }
-
-            try
-            {
-                if (_localDownedSavedBonusLife > 0 && hero.bonusLife < _localDownedSavedBonusLife)
-                    hero.bonusLife = _localDownedSavedBonusLife;
-            }
-            catch { }
-
-            try
-            {
-                if (_localDownedSavedBrutalityTier > 0 && hero.brutalityTier < _localDownedSavedBrutalityTier)
-                    hero.brutalityTier = _localDownedSavedBrutalityTier;
-                if (_localDownedSavedSurvivalTier > 0 && hero.survivalTier < _localDownedSavedSurvivalTier)
-                    hero.survivalTier = _localDownedSavedSurvivalTier;
-                if (_localDownedSavedTacticTier > 0 && hero.tacticTier < _localDownedSavedTacticTier)
-                    hero.tacticTier = _localDownedSavedTacticTier;
-            }
-            catch { }
-
-            try
-            {
-                var data = hero._level?.game?.data;
-                if (data != null)
-                {
-                    if (_localDownedSavedBrutalityTier > 0 && data.brutalityTier < _localDownedSavedBrutalityTier)
-                        data.brutalityTier = _localDownedSavedBrutalityTier;
-                    if (_localDownedSavedSurvivalTier > 0 && data.survivalTier < _localDownedSavedSurvivalTier)
-                        data.survivalTier = _localDownedSavedSurvivalTier;
-                    if (_localDownedSavedTacticTier > 0 && data.tacticTier < _localDownedSavedTacticTier)
-                        data.tacticTier = _localDownedSavedTacticTier;
-                }
-            }
-            catch { }
-
-            try
-            {
-                if (_localDownedSavedMaxLife > 0 && hero.maxLife < _localDownedSavedMaxLife)
-                    hero.maxLife = _localDownedSavedMaxLife;
-            }
-            catch { }
-        }
-
-        private void ClearLocalDownedStatSnapshot()
-        {
-            _localDownedStatsCaptured = false;
-            _localDownedSavedMaxLife = 0;
-            _localDownedSavedBrutalityTier = 0;
-            _localDownedSavedSurvivalTier = 0;
-            _localDownedSavedTacticTier = 0;
-            _localDownedSavedBonusLife = 0;
-        }
-
-        private static void SetLocalGameTimerPausedForRevive(bool paused)
-        {
-            // v6.3.5: do not freeze Dead Cells global game time while fake-dead.
-            // Using data.stopGameTime for revive pause can soft-lock the client after spike/void
-            // rescue because the local game keeps its cinematic/control state frozen. Keep the
-            // world running and only make sure older paused states are cleared.
-            try
-            {
-                var data = dc.pr.Game.Class.ME?.data;
-                if (data != null && data.stopGameTime)
-                    data.stopGameTime = false;
-            }
-            catch { }
-        }
-
-        private void ResetReviveBurst()
-        {
-            _reviveBurstTargetId = 0;
-            _reviveBurstUntilTicks = 0;
-            _nextReviveBurstSendTicks = 0;
-        }
-
-        private void StartReviveRequestBurst(NetNode net, int targetId)
-        {
-            if (net == null || targetId <= 0)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-            _reviveBurstTargetId = targetId;
-            _reviveBurstUntilTicks = now + (long)(Stopwatch.Frequency * ReviveRequestBurstSeconds);
-            _nextReviveBurstSendTicks = 0;
-            SendReviveRequestBurstTick(net, now);
-        }
-
-        private void ContinueReviveRequestBurst(NetNode net)
-        {
-            if (net == null || _reviveBurstTargetId <= 0)
-                return;
-
-            var now = Stopwatch.GetTimestamp();
-            if (_reviveBurstUntilTicks == 0 || now >= _reviveBurstUntilTicks)
-            {
-                ResetReviveBurst();
-                return;
-            }
-
-            if (!_remoteDowned.ContainsKey(_reviveBurstTargetId))
-            {
-                ResetReviveBurst();
-                return;
-            }
-
-            SendReviveRequestBurstTick(net, now);
-        }
-
-        private void SendReviveRequestBurstTick(NetNode net, long now)
-        {
-            if (_reviveBurstTargetId <= 0)
-                return;
-            if (_nextReviveBurstSendTicks != 0 && now < _nextReviveBurstSendTicks)
-                return;
-
-            try { net.SendPlayerReviveRequest(_reviveBurstTargetId); } catch { }
-            _nextReviveBurstSendTicks = now + (long)(Stopwatch.Frequency * ReviveRequestBurstIntervalSeconds);
-        }
-
         private void EnterLocalFakeDeath(Hero hero, NetNode net)
         {
             if (hero == null)
                 return;
 
             ResetAllDownedGameOverState();
-            ClearLocalDownedStatSnapshot();
-            CaptureLocalDownedStats(hero);
-            SetLocalGameTimerPausedForRevive(true);
             _localFakeDead = true;
             _localExitPenaltyApplied = false;
             _localFakeDeadStartedTicks = Stopwatch.GetTimestamp();
@@ -1066,7 +756,6 @@ namespace DeadCellsMultiplayerMod
             _localDownedY = sprY;
             _localHeldX = _localDownedX;
             _localHeldY = _localDownedY;
-            RescueLocalDownedPositionIfUnsafe(hero, "enter_fake_death", force: true);
             _localDownedAnchorX = _localDownedX;
             _localDownedAnchorY = _localDownedY;
             _hasLocalDownedAnchor = true;
@@ -1086,7 +775,8 @@ namespace DeadCellsMultiplayerMod
             try { hero.cancelVelocities(); } catch { }
             try { hero.lockControlsS(10.0); } catch { }
             try { hero.cancelSkillControlLock(); } catch { }
-            ForceParkLocalDownedHero(hero, clampToGround: true);
+            SnapHeroToDownedPosition(hero, _localDownedX, _localDownedY, clampToGround: false);
+            StartLocalDeadCine(hero);
 
             SendLocalDownedState(net, isDowned: true, force: true);
         }
@@ -1095,8 +785,6 @@ namespace DeadCellsMultiplayerMod
         {
             if (!_localFakeDead || me == null)
                 return;
-
-            SetLocalGameTimerPausedForRevive(true);
 
             try
             {
@@ -1107,8 +795,8 @@ namespace DeadCellsMultiplayerMod
             {
             }
 
-            // v6.4.6: no local death cinematic/corpse while downed. The hidden hero is parked
-            // at one safe anchor; this prevents the vanilla death body from falling through the map.
+            if (_localDeadCine == null)
+                StartLocalDeadCine(me);
 
             if (!HasAliveRemoteTeammate(net))
             {
@@ -1132,13 +820,13 @@ namespace DeadCellsMultiplayerMod
             try { me.cancelSkillControlLock(); } catch { }
             try { me._targetable = false; } catch { }
 
-            // v6.4.7: once fake-dead, keep one authoritative anchor until revive/reset.
-            // Do not let any corpse/hero physics update become the new revive position.
-            if (!MaintainDownedSafeRescueLock())
-                RescueLocalDownedPositionIfUnsafe(me, "maintain_fake_death", force: false);
-            ReassertLocalDownedAnchor(me);
+            var cine = _localDeadCine;
+            if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
+            {
+                TryUpdateDownedPositionFromCorpse(corpseX, corpseY);
+            }
 
-            ForceParkLocalDownedHero(me, clampToGround: true);
+            SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
             SendLocalDownedState(net, isDowned: true, force: false);
         }
 
@@ -1157,163 +845,6 @@ namespace DeadCellsMultiplayerMod
             }
 
             SnapHeroToDownedPosition(me, _postReviveLockX, _postReviveLockY);
-        }
-
-        private void ForceParkLocalDownedHero(Hero hero, bool clampToGround = true)
-        {
-            if (hero == null)
-                return;
-
-            CaptureLocalDownedHeroRuntimeState(hero);
-
-            try
-            {
-                if (hero.life <= 0)
-                    hero.life = 1;
-            }
-            catch { }
-
-            try { hero._targetable = false; } catch { }
-            try { hero.visible = false; } catch { }
-            TrySetHeroHeadVisible(hero, false);
-
-            try { hero.dx = 0; } catch { }
-            try { hero.dy = 0; } catch { }
-            try { hero.bdx = 0; } catch { }
-            try { hero.bdy = 0; } catch { }
-            try { hero.hasGravity = false; } catch { }
-            try { hero.cancelVelocities(); } catch { }
-            try { hero.cancelSkillControlLock(); } catch { }
-            try { hero.lockControlsS(0.35); } catch { }
-
-            var x = _localHeldX;
-            var y = _localHeldY - DownedParkedHeroYOffsetPx;
-            try { hero.setPosPixel(x, y); } catch { }
-            try { ForceSetHeroCaseFromPixel(hero, x, y); } catch { }
-            if (clampToGround)
-                SnapHeroToDownedPosition(hero, x, y, clampToGround: true);
-
-            try { hero.cancelVelocities(); } catch { }
-            try { hero.dx = 0; } catch { }
-            try { hero.dy = 0; } catch { }
-            try { hero.bdx = 0; } catch { }
-            try { hero.bdy = 0; } catch { }
-        }
-
-        private void CaptureLocalDownedHeroRuntimeState(Hero hero)
-        {
-            if (hero == null)
-                return;
-
-            if (!_localDownedHeroGravityWasCaptured)
-            {
-                try { _localDownedHeroHadGravity = hero.hasGravity; }
-                catch { _localDownedHeroHadGravity = true; }
-                _localDownedHeroGravityWasCaptured = true;
-            }
-
-            if (!_localDownedHeroVisibilityWasCaptured)
-            {
-                try { _localDownedHeroWasVisible = hero.visible; }
-                catch { _localDownedHeroWasVisible = true; }
-                _localDownedHeroVisibilityWasCaptured = true;
-            }
-        }
-
-        private void RestoreLocalDownedHeroRuntimeState(Hero? hero)
-        {
-            if (hero != null)
-            {
-                try { hero.hasGravity = _localDownedHeroGravityWasCaptured ? _localDownedHeroHadGravity : true; } catch { }
-                try { hero.visible = _localDownedHeroVisibilityWasCaptured ? _localDownedHeroWasVisible : true; } catch { }
-                TrySetHeroHeadVisible(hero, true);
-                try { hero._targetable = true; } catch { }
-            }
-
-            _localDownedHeroGravityWasCaptured = false;
-            _localDownedHeroHadGravity = true;
-            _localDownedHeroVisibilityWasCaptured = false;
-            _localDownedHeroWasVisible = true;
-        }
-
-        private static void TrySetHeroHeadVisible(Hero hero, bool visible)
-        {
-            if (hero == null)
-                return;
-
-            try
-            {
-                var head = hero.heroHead;
-                if (head == null)
-                    return;
-
-                try { head.customHeadSpr?.set_visible(visible); } catch { }
-                try { head.customBackSpr?.set_visible(visible); } catch { }
-                try { head.headNormalSb?.set_visible(visible); } catch { }
-                try { head.headAddSb?.set_visible(visible); } catch { }
-                try { head.eye?.set_visible(visible); } catch { }
-                // Leave headBlack untouched; sprite visibility is enough and avoids changing
-                // custom-head state after revive.
-            }
-            catch
-            {
-            }
-        }
-
-        private void ReassertLocalDownedAnchor(Hero hero)
-        {
-            if (hero == null || !_localFakeDead)
-                return;
-
-            if (!_hasLocalDownedAnchor)
-            {
-                _localDownedAnchorX = _localHeldX;
-                _localDownedAnchorY = _localHeldY;
-                _hasLocalDownedAnchor = double.IsFinite(_localDownedAnchorX) && double.IsFinite(_localDownedAnchorY);
-            }
-
-            if (!_hasLocalDownedAnchor)
-                return;
-
-            _localDownedX = _localDownedAnchorX;
-            _localDownedY = _localDownedAnchorY;
-            _localHeldX = _localDownedAnchorX;
-            _localHeldY = _localDownedAnchorY;
-            _downedSafeRescueLockX = _localDownedAnchorX;
-            _downedSafeRescueLockY = _localDownedAnchorY;
-            if (_downedSafeRescueLockUntilTicks == 0)
-                _downedSafeRescueLockUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * DownedPermanentAnchorRefreshSeconds);
-
-            try { hero.cancelVelocities(); } catch { }
-            try { hero.dx = 0; } catch { }
-            try { hero.dy = 0; } catch { }
-            try { hero.bdx = 0; } catch { }
-            try { hero.bdy = 0; } catch { }
-            try { hero.hasGravity = false; } catch { }
-            try { hero._targetable = false; } catch { }
-            try { hero.visible = false; } catch { }
-            TrySetHeroHeadVisible(hero, false);
-            try { hero.setPosPixel(_localDownedAnchorX, _localDownedAnchorY - DownedParkedHeroYOffsetPx); } catch { }
-            try { ForceSetHeroCaseFromPixel(hero, _localDownedAnchorX, _localDownedAnchorY - DownedParkedHeroYOffsetPx); } catch { }
-        }
-
-        private static void ForceSetHeroCaseFromPixel(Hero hero, double x, double y)
-        {
-            if (hero == null || !double.IsFinite(x) || !double.IsFinite(y))
-                return;
-
-            try
-            {
-                var cx = (int)System.Math.Floor(x / 24.0);
-                var cy = (int)System.Math.Floor(y / 24.0);
-                var xr = (x / 24.0) - cx;
-                var yr = (y / 24.0) - cy;
-                if (double.IsFinite(xr) && double.IsFinite(yr))
-                    hero.setPosCase(cx, cy, xr, yr);
-            }
-            catch
-            {
-            }
         }
 
         private static void SnapHeroToDownedPosition(Hero hero, double x, double y, bool clampToGround = true)
@@ -1353,9 +884,6 @@ namespace DeadCellsMultiplayerMod
 
             ResetAllDownedGameOverState();
             var hero = me;
-            RestoreLocalDownedStats(hero);
-            SetLocalGameTimerPausedForRevive(false);
-            RestoreLocalDownedHeroRuntimeState(hero);
             _localFakeDead = false;
             _localExitPenaltyApplied = false;
             _localFakeDeadStartedTicks = 0;
@@ -1384,13 +912,10 @@ namespace DeadCellsMultiplayerMod
             _localHeldX = _postReviveLockX;
             _localHeldY = _postReviveLockY;
 
-            if (IsHeroRuntimeSafeForControlUnlock(hero))
-            {
-                try { hero.cancelVelocities(); } catch { }
-                try { hero.cancelSkillControlLock(); } catch { }
-                try { hero.unlockControls(); } catch { }
-                try { hero._targetable = true; } catch { }
-            }
+            try { hero.cancelVelocities(); } catch { }
+            try { hero.cancelSkillControlLock(); } catch { }
+            try { hero.unlockControls(); } catch { }
+            try { hero._targetable = true; } catch { }
 
             try
             {
@@ -1408,18 +933,83 @@ namespace DeadCellsMultiplayerMod
                 try { hero.fullHeal(); } catch { }
             }
 
-            try { net.SendHP(hero.life, hero.maxLife, hero.life, hero.bonusLife, hero.radius); } catch { }
             SendLocalDownedState(net, isDowned: false, force: true);
-            ClearLocalDownedStatSnapshot();
         }
 
         private void ApplyLocalDownedExitPenaltyIfNeededCore()
         {
-            // v6.3: no stat/HP penalty while downed. The old penalty removed
-            // Brutality/Survival/TacticUp items during auto-follow/exit failsafe,
-            // which made revived players drop back to base HP after being carried
-            // through doors or boss exits.
+            if (!_localFakeDead || _localExitPenaltyApplied || me == null)
+                return;
+
             _localExitPenaltyApplied = true;
+            var hero = me;
+
+            try { hero.spdComboKills = 0; } catch { }
+            try { hero.perfectKillsCount = 0; } catch { }
+            try { hero.goldCombo = 0; } catch { }
+
+            try
+            {
+                var data = hero._level?.game?.data;
+                if (data != null)
+                {
+                    data.killCount = 0;
+                    data.corruptedHealingKillCount = 0;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                bool noStats = true;
+                hero.tryToSubstractMoney(int.MaxValue, Ref<bool>.From(ref noStats));
+            }
+            catch
+            {
+                try
+                {
+                    var data = hero._level?.game?.data;
+                    if (data != null)
+                        data.money = 0;
+                    hero.hudSetMoney(0);
+                }
+                catch
+                {
+                }
+            }
+
+            try
+            {
+                var inventory = hero.inventory;
+                if (inventory != null)
+                {
+                    inventory.removeAll("BrutalityUp".AsHaxeString());
+                    inventory.removeAll("SurvivalUp".AsHaxeString());
+                    inventory.removeAll("TacticUp".AsHaxeString());
+                }
+            }
+            catch
+            {
+            }
+
+            try { hero.computeTiers(); } catch { }
+
+            try
+            {
+                var data = hero._level?.game?.data;
+                if (data != null)
+                {
+                    data.money = 0;
+                    data.brutalityTier = hero.brutalityTier;
+                    data.survivalTier = hero.survivalTier;
+                    data.tacticTier = hero.tacticTier;
+                }
+            }
+            catch
+            {
+            }
         }
 
         private void ProcessReviveHold(NetNode net)
@@ -1427,7 +1017,6 @@ namespace DeadCellsMultiplayerMod
             if (me == null || _remoteDowned.Count == 0)
             {
                 ResetReviveHold();
-                ResetReviveBurst();
                 ClearReviveHints();
                 return;
             }
@@ -1473,9 +1062,8 @@ namespace DeadCellsMultiplayerMod
                 return;
             }
 
-            StartReviveRequestBurst(net, nearest.UserId);
+            net.SendPlayerReviveRequest(nearest.UserId);
             _nextReviveAttemptTicks = now + (long)(Stopwatch.Frequency * ReviveAttemptCooldownSeconds);
-            try { MultiplayerUI.PushSystemMessage(FormatLocalized("Reviving player..."), 2.0, 0.3); } catch { }
             ResetReviveHold();
             ClearReviveHints();
         }
@@ -1527,8 +1115,15 @@ namespace DeadCellsMultiplayerMod
                 if (distSq > ReviveUseDistancePx * ReviveUseDistancePx)
                     continue;
 
-                // v6.0: do not reject revive because the downed player's homunculus/head
-                // position is stale. The body position is the authoritative revive target.
+                if (state.HasHeadPosition)
+                {
+                    var hdx = state.HeadX - state.X;
+                    var hdy = state.HeadY - state.Y;
+                    var headBodyDistSq = hdx * hdx + hdy * hdy;
+                    var maxHeadBodySq = ReviveHomunculusBodyMaxDistancePx * ReviveHomunculusBodyMaxDistancePx * 16.0;
+                    if (headBodyDistSq > maxHeadBodySq)
+                        continue;
+                }
 
                 if (distSq < bestDistSq)
                 {
@@ -1632,9 +1227,21 @@ namespace DeadCellsMultiplayerMod
             double? headX = null;
             double? headY = null;
             string? headAnim = null;
+            if (isDowned && _localDeadCine != null && _localDeadCine.TryGetHomunculusPixelPosition(out var hx, out var hy))
+            {
+                headX = hx;
+                headY = hy;
+                _localDeadCine.TryGetHomunculusAnim(out headAnim);
+            }
 
             var now = Stopwatch.GetTimestamp();
             var resend = (long)(Stopwatch.Frequency * DownedStateResendSeconds);
+            if (isDowned && headX.HasValue && headY.HasValue)
+            {
+                var fastResend = (long)(Stopwatch.Frequency * DownedHeadStateResendSeconds);
+                if (fastResend > 0 && (resend <= 0 || fastResend < resend))
+                    resend = fastResend;
+            }
             if (!force && _nextDownedStateSendTicks != 0 && now < _nextDownedStateSendTicks)
                 return;
 
@@ -1668,10 +1275,20 @@ namespace DeadCellsMultiplayerMod
 
         private void StartLocalDeadCine(Hero hero)
         {
-            // v6.4.6: intentionally disabled. Even with HeroDeadCorpse creation disabled in
-            // DeadBase, entering the vanilla ghost-death cinematic can still leave a physical
-            // body/target anchor that falls through floors and can trigger duplicated drops.
-            _localDeadCine = null;
+            if (hero == null)
+                return;
+
+            if (_localDeadCine != null)
+                return;
+
+            try
+            {
+                _localDeadCine = new DeadBase(hero, ModEntry.GetPrimaryClient());
+            }
+            catch
+            {
+                _localDeadCine = null;
+            }
         }
 
         private void StopLocalDeadCine()
@@ -1693,7 +1310,6 @@ namespace DeadCellsMultiplayerMod
         {
             ResetAllDownedGameOverState();
             var wasFakeDead = _localFakeDead;
-            RestoreLocalDownedHeroRuntimeState(me);
             _localFakeDead = false;
             _localExitPenaltyApplied = false;
             _localFakeDeadStartedTicks = 0;
@@ -1708,16 +1324,9 @@ namespace DeadCellsMultiplayerMod
             _postReviveLockUntilTicks = 0;
             _postReviveLockX = 0;
             _postReviveLockY = 0;
-            _downedSafeRescueLockUntilTicks = 0;
-            _downedSafeRescueLockX = 0;
-            _downedSafeRescueLockY = 0;
-            SetLocalGameTimerPausedForRevive(false);
-            ResetReviveBurst();
-            ClearLocalDownedStatSnapshot();
             _hasLocalDownedAnchor = false;
             _localDownedAnchorX = 0;
             _localDownedAnchorY = 0;
-            _nextDownedSafeRescueCheckTicks = 0;
             ResetReviveHold();
             ClearReviveHints();
             if (clearRemoteDownedTracking)
@@ -1734,11 +1343,11 @@ namespace DeadCellsMultiplayerMod
                 }
             }
 
-            if (unlockLocalHero && IsHeroRuntimeSafeForControlUnlock(me))
+            if (unlockLocalHero && me != null)
             {
-                try { me!.cancelSkillControlLock(); } catch { }
-                try { me!.unlockControls(); } catch { }
-                try { me!._targetable = true; } catch { }
+                try { me.cancelSkillControlLock(); } catch { }
+                try { me.unlockControls(); } catch { }
+                try { me._targetable = true; } catch { }
             }
 
             if (sendNetworkUpState && wasFakeDead && _net != null && _netRole != NetRole.None)
@@ -1761,6 +1370,9 @@ namespace DeadCellsMultiplayerMod
             {
             }
 
+            if (_localDeadCine == null)
+                StartLocalDeadCine(me);
+
             var now = Stopwatch.GetTimestamp();
             if (!_allDownedGameOverShown)
             {
@@ -1774,8 +1386,12 @@ namespace DeadCellsMultiplayerMod
             try { me.cancelSkillControlLock(); } catch { }
             try { me._targetable = false; } catch { }
 
-            RescueLocalDownedPositionIfUnsafe(me, "all_downed_fake_death", force: false);
-            ForceParkLocalDownedHero(me, clampToGround: true);
+            var cine = _localDeadCine;
+            if (cine != null && cine.TryGetCorpsePixelPosition(out var corpseX, out var corpseY))
+            {
+                TryUpdateDownedPositionFromCorpse(corpseX, corpseY);
+            }
+            SnapHeroToDownedPosition(me, _localHeldX, _localHeldY, clampToGround: false);
             SendLocalDownedState(net, isDowned: true, force: false);
 
             if (_allDownedRestartQueued || _netRole != NetRole.Host)
@@ -1784,13 +1400,8 @@ namespace DeadCellsMultiplayerMod
             if (_allDownedRestartAtTicks != 0 && now < _allDownedRestartAtTicks)
                 return;
 
-            // v5.9: do not auto-call launchGame/newGame while both players are in the
-            // fake-death/game-over state. The current DCCM/Hashlink build can hit an
-            // AccessViolation in User.newGame/GC during that transition. Stop the session
-            // cleanly and let the host start a fresh multiplayer run from the menu instead.
             _allDownedRestartQueued = true;
-            try { MultiplayerUI.PushSystemMessage("Both players are down. Multiplayer stopped safely; start a new run from the menu."); } catch { }
-            try { StopNetworkFromMenu(); } catch { }
+            GameMenu.QueueHostRestartFromDeath("all_players_downed");
         }
 
         private void ShowAllDownedGameOverLogo()
@@ -1826,28 +1437,6 @@ namespace DeadCellsMultiplayerMod
             }
         }
 
-        private static bool IsHeroRuntimeSafeForControlUnlock(Hero? hero)
-        {
-            if (hero == null)
-                return false;
-
-            try
-            {
-                if (hero.destroyed || hero._level == null || hero._level.destroyed)
-                    return false;
-                if (hero._level.game == null || hero._level.game.destroyed)
-                    return false;
-                if (dc.pr.Game.Class.ME == null)
-                    return false;
-            }
-            catch
-            {
-                return false;
-            }
-
-            return true;
-        }
-
         private static string Localize(string message)
         {
             return GetText.Instance.GetString(message);
@@ -1873,591 +1462,30 @@ namespace DeadCellsMultiplayerMod
             _allDownedRestartAtTicks = 0;
         }
 
-        private void TrackLocalReviveSafePosition()
-        {
-            var hero = me;
-            if (hero == null || _localFakeDead)
-                return;
-
-            if (!TryGetSafeReviveAnchor(hero, out var x, out var y))
-                return;
-
-            _hasLocalReviveSafePosition = true;
-            _localReviveSafeX = x;
-            _localReviveSafeY = y;
-            _localReviveSafeLevelId = GetCurrentLevelId();
-            _localReviveSafeTicks = Stopwatch.GetTimestamp();
-            RecordLocalReviveSafeHistory(x, y, _localReviveSafeLevelId, _localReviveSafeTicks);
-        }
-
-        private bool RescueLocalDownedPositionIfUnsafe(Hero hero, string reason, bool force, double? proposedX = null, double? proposedY = null)
-        {
-            if (hero == null)
-                return false;
-
-            var now = Stopwatch.GetTimestamp();
-            if (!force && _nextDownedSafeRescueCheckTicks != 0 && now < _nextDownedSafeRescueCheckTicks)
-                return false;
-            _nextDownedSafeRescueCheckTicks = now + (long)(Stopwatch.Frequency * DownedUnsafeRescueCheckIntervalSeconds);
-
-            var checkX = proposedX ?? _localHeldX;
-            var checkY = proposedY ?? _localHeldY;
-            if (!ShouldUseSavedSafeDownedPosition(hero, checkX, checkY, force))
-                return false;
-
-            if (!TryGetBestDownedRescuePoint(hero, out var safeX, out var safeY, out var source))
-                return false;
-
-            _localDownedX = safeX;
-            _localDownedY = safeY;
-            _localHeldX = safeX;
-            _localHeldY = safeY;
-            _localDownedAnchorX = safeX;
-            _localDownedAnchorY = safeY;
-            _hasLocalDownedAnchor = true;
-            _downedSafeRescueLockX = safeX;
-            _downedSafeRescueLockY = safeY;
-            _downedSafeRescueLockUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * DownedSafeRescueLockSeconds);
-            _nextDownedStateSendTicks = 0;
-
-            StabilizeLocalDownedAfterSafeRescue(hero, reason);
-
-            try
-            {
-                Logger.Information("[NetMod][Revive] Moved downed body to safe revive point reason={Reason} source={Source} x={X:0.0} y={Y:0.0}", reason, source, safeX, safeY);
-            }
-            catch
-            {
-            }
-
-            return true;
-        }
-
-        private void StabilizeLocalDownedAfterSafeRescue(Hero hero, string reason)
-        {
-            if (hero == null)
-                return;
-
-            // The safe-position rescue can happen while the player is dying in spikes/void and
-            // while vanilla death/hazard states still hold velocities or cinematic locks. Clear
-            // those transient states without reviving the player; they remain fake-dead/downed.
-            try { hero.cancelVelocities(); } catch { }
-            try { hero.cancelSkillControlLock(); } catch { }
-            try { hero.lockControlsS(0.25); } catch { }
-            try { hero._targetable = false; } catch { }
-            try
-            {
-                var data = dc.pr.Game.Class.ME?.data;
-                if (data != null && data.stopGameTime)
-                    data.stopGameTime = false;
-            }
-            catch { }
-
-            ForceParkLocalDownedHero(hero, clampToGround: true);
-        }
-
-        private bool MaintainDownedSafeRescueLock()
-        {
-            if (!_localFakeDead || me == null || _downedSafeRescueLockUntilTicks == 0)
-                return false;
-
-            var now = Stopwatch.GetTimestamp();
-            // v6.4.7: do not expire the safe anchor while the player is downed. The previous
-            // 6 second expiry let vanilla falling/corpse physics become authoritative again,
-            // which caused the marker to sink through floors and trigger duplicate drops.
-            if (now >= _downedSafeRescueLockUntilTicks)
-                _downedSafeRescueLockUntilTicks = now + (long)(Stopwatch.Frequency * DownedPermanentAnchorRefreshSeconds);
-
-            _localDownedX = _downedSafeRescueLockX;
-            _localDownedY = _downedSafeRescueLockY;
-            _localHeldX = _downedSafeRescueLockX;
-            _localHeldY = _downedSafeRescueLockY;
-            _localDownedAnchorX = _downedSafeRescueLockX;
-            _localDownedAnchorY = _downedSafeRescueLockY;
-            _hasLocalDownedAnchor = true;
-
-            try { me.cancelVelocities(); } catch { }
-            try { me.lockControlsS(0.25); } catch { }
-            try { me._targetable = false; } catch { }
-            ForceParkLocalDownedHero(me, clampToGround: true);
-            return true;
-        }
-
-        private void TrySnapLocalDeadCineToHeldPosition()
-        {
-            // v6.4.6: local death cinematic is disabled. The hidden hero is parked directly.
-        }
-
-        private bool ShouldUseSavedSafeDownedPosition(Hero hero, double x, double y, bool force)
-        {
-            if (hero == null)
-                return false;
-            if (!double.IsFinite(x) || !double.IsFinite(y))
-                return true;
-            if (force && !IsPixelPositionReviveAccessible(hero, x, y))
-                return true;
-
-            if (_hasLocalReviveSafePosition)
-            {
-                if (IsLocalReviveSafePositionFresh() && IsLocalReviveSafePositionForCurrentLevel())
-                {
-                    if (y > _localReviveSafeY + DownedVoidRescueDropPx)
-                        return true;
-                }
-            }
-
-            if (!IsPixelPositionReviveAccessible(hero, x, y))
-                return true;
-
-            return false;
-        }
-
-        private bool TryGetBestDownedRescuePoint(Hero hero, out double x, out double y, out string source)
-        {
-            // v6.3.6: Prefer the last actually visited teleporter/fast-travel point.
-            // Trap floors such as spikes can look like valid ground, so the most recent
-            // generic safe-ground sample is not always safe enough for revive placement.
-            if (TryGetLastVisitedTeleporterRevivePoint(hero, out x, out y))
-            {
-                source = "last_teleporter";
-                return true;
-            }
-
-            // If there is no teleporter yet, use an older safe-ground history point instead
-            // of the latest frame. This avoids saving the exact spike/trap tile during the
-            // death frame and moving the downed body back into the hazard.
-            if (TryGetAgedLocalReviveSafePosition(hero, out x, out y))
-            {
-                source = "aged_safe_position";
-                return true;
-            }
-
-            if (TryGetNearestRemotePlayerPixel(hero, out x, out y))
-            {
-                y -= LocalReviveBodyYOffsetPx;
-                source = "teammate_position";
-                return true;
-            }
-
-            if (TryGetSafeReviveAnchor(hero, out x, out y))
-            {
-                source = "current_ground";
-                return true;
-            }
-
-            source = string.Empty;
-            x = 0;
-            y = 0;
-            return false;
-        }
-
-        public void RememberLocalReviveTeleporterPosition(double x, double y)
-        {
-            if (!double.IsFinite(x) || !double.IsFinite(y))
-                return;
-
-            var hero = me;
-            if (hero == null)
-                return;
-
-            try
-            {
-                if (hero._level == null || hero._level.destroyed)
-                    return;
-            }
-            catch
-            {
-                return;
-            }
-
-            // Put the revive body slightly above the teleporter platform so it does not sink
-            // into the teleporter entity or nearby hazard floor.
-            _hasLocalReviveTeleporterPosition = true;
-            _localReviveTeleporterX = x;
-            _localReviveTeleporterY = y - LocalReviveBodyYOffsetPx;
-            _localReviveTeleporterLevelId = GetCurrentLevelId();
-            _localReviveTeleporterTicks = Stopwatch.GetTimestamp();
-            RecordLocalReviveSafeHistory(_localReviveTeleporterX, _localReviveTeleporterY, _localReviveTeleporterLevelId, _localReviveTeleporterTicks);
-        }
-
-        private void RecordLocalReviveSafeHistory(double x, double y, string levelId, long ticks)
-        {
-            if (!double.IsFinite(x) || !double.IsFinite(y) || ticks <= 0)
-                return;
-
-            if (_localReviveSafeHistory.Count > 0)
-            {
-                var last = _localReviveSafeHistory[_localReviveSafeHistory.Count - 1];
-                var dx = last.X - x;
-                var dy = last.Y - y;
-                if (dx * dx + dy * dy < 48.0 * 48.0 &&
-                    ticks - last.Ticks < (long)(Stopwatch.Frequency * 0.5))
-                {
-                    return;
-                }
-            }
-
-            _localReviveSafeHistory.Add(new ReviveSafeAnchor(x, y, levelId, ticks));
-            if (_localReviveSafeHistory.Count > ReviveSafeHistoryMaxEntries)
-                _localReviveSafeHistory.RemoveRange(0, _localReviveSafeHistory.Count - ReviveSafeHistoryMaxEntries);
-        }
-
-        private bool TryGetLastVisitedTeleporterRevivePoint(Hero hero, out double x, out double y)
-        {
-            x = 0;
-            y = 0;
-            if (hero == null || !_hasLocalReviveTeleporterPosition || _localReviveTeleporterTicks == 0)
-                return false;
-
-            var now = Stopwatch.GetTimestamp();
-            if (now - _localReviveTeleporterTicks > (long)(Stopwatch.Frequency * ReviveTeleporterMaxAgeSeconds))
-                return false;
-            if (!IsAnchorLevelCurrent(_localReviveTeleporterLevelId))
-                return false;
-            if (!IsPixelPositionReviveAccessible(hero, _localReviveTeleporterX, _localReviveTeleporterY))
-                return false;
-
-            x = _localReviveTeleporterX;
-            y = _localReviveTeleporterY;
-            return true;
-        }
-
-        private bool TryGetAgedLocalReviveSafePosition(Hero hero, out double x, out double y)
-        {
-            x = 0;
-            y = 0;
-            if (hero == null)
-                return false;
-
-            var now = Stopwatch.GetTimestamp();
-            var minAge = (long)(Stopwatch.Frequency * ReviveSafeHistoryMinAgeSeconds);
-            var maxAge = (long)(Stopwatch.Frequency * ReviveSafeHistoryMaxAgeSeconds);
-
-            for (var i = _localReviveSafeHistory.Count - 1; i >= 0; i--)
-            {
-                var anchor = _localReviveSafeHistory[i];
-                var age = now - anchor.Ticks;
-                if (age < minAge)
-                    continue;
-                if (age > maxAge)
-                    break;
-                if (!IsAnchorLevelCurrent(anchor.LevelId))
-                    continue;
-                if (!IsPixelPositionReviveAccessible(hero, anchor.X, anchor.Y))
-                    continue;
-
-                x = anchor.X;
-                y = anchor.Y;
-                return true;
-            }
-
-            // Backwards-compatible fallback for old sessions that have no history yet.
-            // Only use it if it is not from the immediate death frame.
-            if (_hasLocalReviveSafePosition && IsLocalReviveSafePositionFresh() && IsLocalReviveSafePositionForCurrentLevel())
-            {
-                var age = now - _localReviveSafeTicks;
-                if (age >= minAge && IsPixelPositionReviveAccessible(hero, _localReviveSafeX, _localReviveSafeY))
-                {
-                    x = _localReviveSafeX;
-                    y = _localReviveSafeY;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool IsAnchorLevelCurrent(string levelId)
-        {
-            var current = GetCurrentLevelId();
-            if (string.IsNullOrWhiteSpace(levelId) || string.IsNullOrWhiteSpace(current))
-                return true;
-            return string.Equals(levelId, current, StringComparison.Ordinal);
-        }
-
-        private bool IsLocalReviveSafePositionFresh()
-        {
-            if (!_hasLocalReviveSafePosition || _localReviveSafeTicks == 0)
-                return false;
-            var ageTicks = Stopwatch.GetTimestamp() - _localReviveSafeTicks;
-            return ageTicks >= 0 && ageTicks <= (long)(Stopwatch.Frequency * ReviveSafePositionMaxAgeSeconds);
-        }
-
-        private bool IsLocalReviveSafePositionForCurrentLevel()
-        {
-            var current = GetCurrentLevelId();
-            if (string.IsNullOrWhiteSpace(_localReviveSafeLevelId) || string.IsNullOrWhiteSpace(current))
-                return true;
-            return string.Equals(_localReviveSafeLevelId, current, StringComparison.Ordinal);
-        }
-
-        private bool TryGetSafeReviveAnchor(Hero hero, out double x, out double y)
-        {
-            x = 0;
-            y = 0;
-            if (hero == null)
-                return false;
-
-            try
-            {
-                if (hero.destroyed || hero._level == null || hero._level.destroyed || hero.spr == null)
-                    return false;
-                if (!double.IsFinite(hero.spr.x) || !double.IsFinite(hero.spr.y))
-                    return false;
-                if (!IsPixelPositionReviveAccessible(hero, hero.spr.x, hero.spr.y))
-                    return false;
-
-                x = hero.spr.x;
-                y = hero.spr.y;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private bool IsPixelPositionReviveAccessible(Hero hero, double pixelX, double pixelY)
-        {
-            if (hero == null || !double.IsFinite(pixelX) || !double.IsFinite(pixelY))
-                return false;
-
-            try
-            {
-                var level = hero._level;
-                var map = level?.map;
-                if (level == null || level.destroyed || map == null)
-                    return false;
-
-                var tx = pixelX / 24.0;
-                var ty = pixelY / 24.0;
-                var cx = (int)System.Math.Floor(tx);
-                var cy = (int)System.Math.Floor(ty);
-                var xr = tx - cx;
-                var yr = ty - cy;
-                if (!double.IsFinite(xr) || !double.IsFinite(yr))
-                    return false;
-
-                var probeXr = xr;
-                var probeYr = yr;
-                var groundYr = map.getGroundYr(cx, cy, Ref<double>.From(ref probeXr), Ref<double>.From(ref probeYr));
-                if (!double.IsFinite(groundYr))
-                    return false;
-
-                // getGroundYr returns the closest floor fractional Y for this cell. If the body is
-                // many cells below the found ground, it is probably falling into void/out-of-bounds.
-                if (yr > groundYr + 2.25)
-                    return false;
-
-                // Spike/trap floors can still look like valid ground to getGroundYr. Reject obvious
-                // nearby hazard entities so the downed body does not get anchored back into the trap
-                // that killed the player.
-                if (IsPixelNearLikelyReviveHazard(hero, pixelX, pixelY))
-                    return false;
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private bool IsPixelNearLikelyReviveHazard(Hero hero, double pixelX, double pixelY)
-        {
-            if (hero == null || !double.IsFinite(pixelX) || !double.IsFinite(pixelY))
-                return true;
-
-            try
-            {
-                var level = hero._level;
-                var elements = level?.listCurrentQuadElements;
-                if (level == null || level.destroyed || elements == null)
-                    return false;
-
-                const double hazardRadiusPx = 72.0;
-                const double hazardRadiusSq = hazardRadiusPx * hazardRadiusPx;
-
-                for (var i = 0; i < elements.length; i++)
-                {
-                    object? raw;
-                    try { raw = elements.getDyn(i); } catch { continue; }
-                    if (raw is not dc.Entity entity)
-                        continue;
-
-                    if (!IsLikelyReviveHazardEntity(entity))
-                        continue;
-
-                    if (!TryGetEntityPixelPosition(entity, out var ex, out var ey))
-                        continue;
-
-                    var dx = ex - pixelX;
-                    var dy = ey - pixelY;
-                    if (dx * dx + dy * dy <= hazardRadiusSq)
-                        return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
-        private static bool IsLikelyReviveHazardEntity(dc.Entity entity)
-        {
-            if (entity == null)
-                return false;
-
-            string name;
-            try { name = entity.GetType().Name ?? string.Empty; } catch { name = string.Empty; }
-            if (string.IsNullOrWhiteSpace(name))
-                return false;
-
-            return name.IndexOf("Spike", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Trap", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Saw", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Blade", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Lava", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Acid", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Poison", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Crusher", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   name.IndexOf("Thorn", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private static bool TryGetEntityPixelPosition(dc.Entity entity, out double x, out double y)
-        {
-            x = 0;
-            y = 0;
-            if (entity == null)
-                return false;
-
-            try
-            {
-                var spr = entity.spr;
-                if (spr != null && double.IsFinite(spr.x) && double.IsFinite(spr.y))
-                {
-                    x = spr.x;
-                    y = spr.y;
-                    return true;
-                }
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                x = (entity.cx + entity.xr) * 24.0;
-                y = (entity.cy + entity.yr) * 24.0;
-                return double.IsFinite(x) && double.IsFinite(y);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private bool TryGetNearestRemotePlayerPixel(Hero hero, out double x, out double y)
-        {
-            x = 0;
-            y = 0;
-            if (hero == null)
-                return false;
-
-            var bestDist = double.MaxValue;
-            var found = false;
-            var localX = hero.spr?.x ?? 0;
-            var localY = hero.spr?.y ?? 0;
-            var localLevelId = GetCurrentLevelId();
-
-            for (int i = 0; i < clients.Length; i++)
-            {
-                var client = clients[i];
-                if (client == null)
-                    continue;
-
-                try
-                {
-                    if (client.destroyed || client.spr == null)
-                        continue;
-                }
-                catch
-                {
-                    continue;
-                }
-
-                var remoteId = clientIds[i];
-                if (remoteId > 0 && _remoteDowned.ContainsKey(remoteId))
-                    continue;
-
-                double rx;
-                double ry;
-                try
-                {
-                    rx = client.spr.x;
-                    ry = client.spr.y;
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (!double.IsFinite(rx) || !double.IsFinite(ry))
-                    continue;
-                if (!string.IsNullOrWhiteSpace(localLevelId) && client._level?.map?.id != null)
-                {
-                    var remoteLevel = client._level.map.id.ToString();
-                    if (!string.IsNullOrWhiteSpace(remoteLevel) && !string.Equals(remoteLevel, localLevelId, StringComparison.Ordinal))
-                        continue;
-                }
-
-                var dx = rx - localX;
-                var dy = ry - localY;
-                var dist = dx * dx + dy * dy;
-                if (dist >= bestDist)
-                    continue;
-
-                bestDist = dist;
-                x = rx;
-                y = ry;
-                found = true;
-            }
-
-            return found;
-        }
-
         private bool TryUpdateDownedPositionFromCorpse(double corpseX, double corpseY)
         {
-            // v6.4.7: never let a corpse/body position update become authoritative for revive.
-            // Dead Cells can still produce or move a death body/anchor even when the mod tries to
-            // hide/disable it. Accepting those coordinates caused the downed marker to fall through
-            // floors, bounce between spikes and teleporters, and repeatedly trigger cell/blueprint
-            // drops. The authoritative position is now only _localHeldX/_localHeldY.
-            if (!_localFakeDead)
+            if (!double.IsFinite(corpseX) || !double.IsFinite(corpseY))
                 return false;
 
-            if (me != null)
+            if (!_hasLocalDownedAnchor)
             {
-                if (_hasLocalDownedAnchor)
-                {
-                    _localDownedX = _localDownedAnchorX;
-                    _localDownedY = _localDownedAnchorY;
-                    _localHeldX = _localDownedAnchorX;
-                    _localHeldY = _localDownedAnchorY;
-                    _downedSafeRescueLockX = _localDownedAnchorX;
-                    _downedSafeRescueLockY = _localDownedAnchorY;
-                    _downedSafeRescueLockUntilTicks = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * DownedPermanentAnchorRefreshSeconds);
-                }
-                else
-                {
-                    RescueLocalDownedPositionIfUnsafe(me, "corpse_position_ignored", force: true);
-                }
-
-                ReassertLocalDownedAnchor(me);
-                _nextDownedStateSendTicks = 0;
+                _localDownedAnchorX = _localDownedX;
+                _localDownedAnchorY = _localDownedY;
+                _hasLocalDownedAnchor = true;
             }
 
+            var dx = corpseX - _localDownedAnchorX;
+            var dy = corpseY - _localDownedAnchorY;
+            var distSq = dx * dx + dy * dy;
+            if (distSq > DownedCorpseMaxDriftSq)
+                return false;
+
+            _localDownedX = corpseX;
+            _localDownedY = corpseY;
+            _localHeldX = _localDownedX;
+            _localHeldY = _localDownedY;
+            _localDownedAnchorX = corpseX;
+            _localDownedAnchorY = corpseY;
             return true;
         }
 

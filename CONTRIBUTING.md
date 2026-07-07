@@ -1,66 +1,65 @@
-# Contributing to DeadCellsCoopPlus
+<div align="center">
 
-Thanks for helping improve DeadCellsCoopPlus.
+English • [Русский](CONTRIBUTING_ru.md)
+  
+</div>
+# Contributing to DeadCellsMultiplayerMod
 
-This project is a community-maintained fork of the original Dead Cells Multiplayer Mod. The main goal is to improve multiplayer stability, synchronization, revive behavior, rune progression, and general co-op quality of life.
+Thank you for your interest in improving this mod. This document describes how to build the project and what we expect from contributions.
 
-## Before contributing
+## Prerequisites
 
-Please make sure your change fits one of these goals:
+- **Windows** (the project targets `net10.0` with `SupportedOSPlatform` Windows).
+- **.NET SDK** compatible with **.NET 10** (see `TargetFramework` in `DeadCellsMultiplayerMod.csproj`).
+- **Dead Cells** with **DCCM (Dead Cells Core Modding API)** installed for local testing.
+- Optional: **`DCCM_MDK_ROOT`** environment variable pointing at your DCCM MDK/tools folder if you need Steamworks references (`Steamworks.NET`, `steam_api64.dll`) resolved via the paths in the project file.
 
-- Fixing multiplayer bugs
-- Improving synchronization
-- Improving revive/downed-player behavior
-- Fixing elite/rune progression issues
-- Improving stability
-- Improving documentation
-- Adding safe quality-of-life features
+## Build
+
+From the repository root:
+
+```powershell
+dotnet build -c Release
+```
+
+Output artifacts are produced under `bin/Release/net10.0/` (and the packaged mod layout as configured by the DCCM MDK targets).
+
+For iterative development with automatic install into your DCCM layout, use **Debug** configuration (`AutoInstallMod` is enabled for Debug in the csproj).
+
+## Project layout (high level)
+
+- `ModEntry.cs` — mod entry point and lifecycle.
+- `Mobs/` — mob synchronization, wire codecs, tracing.
+- `Ghost/` — remote player ghost and related hooks.
+- `UI/` — in-game UI.
+- `Resourcefile/lang/` — localization (`.po` / `.pot`).
+- `server/` — networking (`NetNode`, wire protocol).
 
 ## How to contribute
+1. **Open an issue** or discuss a **small, scoped** change before large refactors.
+2. **Fork** the repository and create a **branch** focused on one feature or fix.
+3. **Keep pull requests focused** — avoid unrelated formatting, renames, or drive-by cleanups in files you are not changing for the task.
+4. **Match existing style** — naming, patterns, and comment density should match surrounding code.
+5. **Build** in Release before submitting; fix any new compiler warnings relevant to your change.
+6. **Describe** what changed and **why** in the PR description (plain language, complete sentences).
 
-1. Fork the repository.
-2. Create a new branch for your change.
+## Code review expectations
 
-```bash
-git checkout -b fix/revive-sync
-```
+- Changes should be **minimal** and **directly related** to the stated goal.
+- Do **not** delete unrelated comments or rewrite large sections without need.
+- Prefer **one clear code path** over many special cases when possible.
+- New user-facing strings belong in **localization** (`Resourcefile/lang/`) when applicable.
 
-3. Make your changes.
-4. Test the mod in-game if possible.
-5. Commit your changes with a clear message.
+## Testing
 
-```bash
-git commit -m "Fix revive body falling through floor"
-```
+There is no automated test suite in this repository. For gameplay changes:
 
-6. Push your branch.
-7. Open a pull request.
+- Run the game **through DCCM** with the mod loaded.
+- For multiplayer, verify **host** and **client** behavior when you touch sync or networking code.
 
-## Pull request guidelines
+## Questions
 
-Please include:
+For DCCM installation and API documentation, see the official DCCM docs and GitHub:
 
-- What the change does
-- What bug it fixes
-- How you tested it
-- Any known problems
-
-## Bug reports
-
-When reporting bugs, include:
-
-- Dead Cells version
-- Mod version
-- Host or client side
-- Steps to reproduce
-- What you expected to happen
-- What actually happened
-- Logs or screenshots if possible
-
-## Code style
-
-Try to keep changes small and focused. Avoid large rewrites unless they are necessary.
-
-## Credits
-
-Please respect the original project and keep credit to the original author.
+- [DCCM install (Steam Workshop)](https://dead-cells-core-modding.github.io/docs/docs/tutorial/install-workshop/)
+- [dead-cells-core-modding/core](https://github.com/dead-cells-core-modding/core)

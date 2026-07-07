@@ -326,38 +326,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         }
 
         private static int s_pendingHostBatchCount;
-        private static long s_nextHostFullMobResyncTick;
-
-        private static void QueueHostFullMobResyncIfDue(NetNode net)
-        {
-            if (!IsHost(net))
-                return;
-
-            var now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (s_nextHostFullMobResyncTick != 0 && now < s_nextHostFullMobResyncTick)
-                return;
-
-            s_nextHostFullMobResyncTick = now + (long)(System.Diagnostics.Stopwatch.Frequency * HostFullMobResyncIntervalSeconds);
-
-            lock (Sync)
-            {
-                PruneInvalidTrackedMobsLocked();
-                for (int i = 0; i < trackedMobs.Count; i++)
-                {
-                    var mob = trackedMobs[i];
-                    if (mob == null || !IsSyncMob(mob))
-                        continue;
-
-                    if (!MobToId.TryGetValue(mob, out var syncId) || syncId < 0)
-                        continue;
-
-                    EnqueueHostMobDirtyLocked(syncId, HostMobDirtyFlags.State | HostMobDirtyFlags.ForceState);
-                }
-            }
-        }
 
         private static void FlushHostDirtyMobQueue(NetNode net)
         {
+            if (IsSyncQuiescedForTransition())
+                return;
+
             if (!IsHost(net))
                 return;
 
@@ -529,6 +503,9 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
         private static void FlushClientDirtyMobQueue(NetNode net)
         {
+            if (IsSyncQuiescedForTransition())
+                return;
+
             if (!IsClient(net))
                 return;
 

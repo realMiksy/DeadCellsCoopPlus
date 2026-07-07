@@ -319,6 +319,8 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 generationAfterRebuild,
                 s_levelIdentityToken);
 
+            ClearSyncQuiesceAfterRebuild();
+
             for (int i = 0; i < s_batchMobsScratch.Count; i++)
                 QueueInitialMobSync(s_batchMobsScratch[i]);
 
@@ -519,6 +521,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
             IdToMob.Clear();
             MobToId.Clear();
             nextRuntimeSyncId = 0;
+            s_pendingCulledMobDeaths.Clear();
             clientMobTargets.Clear();
             clientCachedAttackTargetByMob.Clear();
             clientQueuedOldSkillMarkers.Clear();
@@ -783,6 +786,12 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                     MobSyncTrace.LogInvariantViolation(reason, $"IdToMob mismatch syncId={syncId} localIndex={i}");
             }
 
+            // The first pass intentionally records every tracked mob/id. Start fresh before
+            // validating IdToMob itself; otherwise every valid dictionary entry is reported as a
+            // duplicate merely because it was already seen through trackedMobs.
+            s_validationSeenMobsScratch.Clear();
+            s_validationSeenSyncIdsScratch.Clear();
+
             foreach (var pair in IdToMob)
             {
                 var syncId = pair.Key;
@@ -1003,20 +1012,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 return unresolvedMob;
             }
 
-            if (TryResolveNearestTypedMobLocked(
-                    state.Index,
-                    state.Type,
-                    state.X,
-                    state.Y,
-                    MobStateTypedRebindMaxDistancePx,
-                    reservedMobs,
-                    out var nearestTypedStateMob) && nearestTypedStateMob != null)
-            {
-                TryRebindTrackedMobSyncIdLocked(nearestTypedStateMob, state.Index);
-                MobSyncTrace.LogBindSyncId("state_nearest_typed", state.Index, state.Type ?? string.Empty, state.X, state.Y);
-                return nearestTypedStateMob;
-            }
-
             if (candidateCount > 1)
             {
                 MobSyncTrace.LogAmbiguousMatchRejected(
@@ -1168,21 +1163,6 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             if (string.IsNullOrWhiteSpace(expectedType))
                 return null;
-
-            if (TryResolveNearestTypedMobLocked(
-                    attack.Index,
-                    expectedType,
-                    attack.X,
-                    attack.Y,
-                    MobHitTypedRebindMaxDistancePx,
-                    null,
-                    out var nearestTypedAttackMob) && nearestTypedAttackMob != null)
-            {
-                TryRebindTrackedMobSyncIdLocked(nearestTypedAttackMob, attack.Index);
-                hostMobTypeBySyncId[attack.Index] = expectedType;
-                MobSyncTrace.LogBindSyncId("attack_nearest_typed", attack.Index, expectedType ?? string.Empty, attack.X, attack.Y);
-                return nearestTypedAttackMob;
-            }
 
             if (!string.IsNullOrWhiteSpace(attack.Type))
                 hostMobTypeBySyncId[attack.Index] = attack.Type;

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using DeadCellsMultiplayerMod;
 using DeadCellsMultiplayerMod.Interaction;
+using DeadCellsMultiplayerMod.AdvancedCoop;
 
 public sealed partial class NetNode
 {
@@ -218,6 +219,27 @@ public sealed partial class NetNode
                     forwardLine = BuildChatLine(effectiveId.Value, message);
             }
 
+            return true;
+        }
+
+
+        if (line.StartsWith("LOBBYSTATE|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["LOBBYSTATE|".Length..];
+            lock (_sync) _hasRemote = true;
+            CoopAdvancedHardening.ReceiveLobbyState(payload);
+            if (_role == NetRole.Host && senderId.HasValue)
+                forwardLine = line.EndsWith("\n", StringComparison.Ordinal) ? line : line + "\n";
+            return true;
+        }
+
+        if (line.StartsWith("RUNEPROG|", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = line["RUNEPROG|".Length..];
+            lock (_sync) _hasRemote = true;
+            CoopAdvancedHardening.ReceiveRuneProgress(payload);
+            if (_role == NetRole.Host && senderId.HasValue)
+                forwardLine = line.EndsWith("\n", StringComparison.Ordinal) ? line : line + "\n";
             return true;
         }
 
@@ -871,30 +893,6 @@ public sealed partial class NetNode
             return true;
         }
 
-        if (line.StartsWith("INTERGENACT|", StringComparison.OrdinalIgnoreCase))
-        {
-            var payload = line["INTERGENACT|".Length..];
-            if (TryParseInterGenericActivatePayload(payload, out var ev))
-            {
-                lock (_sync)
-                {
-                    _pendingInterGenericActivateEvents.Add(ev);
-                    _hasRemote = true;
-                }
-
-                if (_role == NetRole.Host && senderId.HasValue)
-                {
-                    var safeType = (ev.TypeName ?? string.Empty)
-                        .Replace("|", "/", StringComparison.Ordinal)
-                        .Replace("\r", string.Empty, StringComparison.Ordinal)
-                        .Replace("\n", string.Empty, StringComparison.Ordinal)
-                        .Trim();
-                    forwardLine = $"INTERGENACT|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}|{safeType}\n";
-                }
-            }
-            return true;
-        }
-
         if (line.StartsWith("INTERBREAK|", StringComparison.OrdinalIgnoreCase))
         {
             var payload = line["INTERBREAK|".Length..];
@@ -925,36 +923,6 @@ public sealed partial class NetNode
 
                 if (_role == NetRole.Host && senderId.HasValue)
                     forwardLine = $"INTERPORTAL|{ev.Action}|{ev.X.ToString(CultureInfo.InvariantCulture)}|{ev.Y.ToString(CultureInfo.InvariantCulture)}\n";
-            }
-            return true;
-        }
-
-        if (line.StartsWith("WORLDOBJ|", StringComparison.OrdinalIgnoreCase))
-        {
-            var payload = line["WORLDOBJ|".Length..];
-            if (TryParseWorldObjectStatePayload(payload, out var state))
-            {
-                lock (_sync)
-                {
-                    _pendingWorldObjectStates.Add(state);
-                    _hasRemote = true;
-                }
-
-                if (_role == NetRole.Host && senderId.HasValue)
-                {
-                    var safeLevel = (state.LevelId ?? string.Empty)
-                        .Replace("|", "/", StringComparison.Ordinal)
-                        .Replace("\r", string.Empty, StringComparison.Ordinal)
-                        .Replace("\n", string.Empty, StringComparison.Ordinal)
-                        .Trim();
-                    var safeType = (state.TypeName ?? string.Empty)
-                        .Replace("|", "/", StringComparison.Ordinal)
-                        .Replace("\r", string.Empty, StringComparison.Ordinal)
-                        .Replace("\n", string.Empty, StringComparison.Ordinal)
-                        .Trim();
-                    forwardLine =
-                        $"WORLDOBJ|{safeLevel}|{safeType}|{state.X.ToString(CultureInfo.InvariantCulture)}|{state.Y.ToString(CultureInfo.InvariantCulture)}|{state.Flags.ToString(CultureInfo.InvariantCulture)}\n";
-                }
             }
             return true;
         }
@@ -991,7 +959,7 @@ public sealed partial class NetNode
                             }
                             else if (ev == "die")
                             {
-                                var die = new MobDie(effectiveUserId, u.Index, u.X, u.Y, u.Type, u.Generation);
+                                var die = new MobDie(effectiveUserId, u.Index, u.X, u.Y, u.Generation);
                                 _pendingMobDies.Add(die);
                                 if (_role == NetRole.Host && senderId.HasValue)
                                     hasDieToForward = true;
