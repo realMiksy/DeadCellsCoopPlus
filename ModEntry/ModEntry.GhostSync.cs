@@ -907,6 +907,13 @@ namespace DeadCellsMultiplayerMod
             var net = _net;
             if (net == null || me == null) return;
 
+            if (IsRemoteKingTransitionActive || IsLocalDiveNetGuardActive())
+            {
+                if (net.TryConsumeRemoteAttacks(out var guardedAttacks))
+                    NetNode.ReleaseConsumedList(guardedAttacks);
+                return;
+            }
+
             if (!net.TryConsumeRemoteAttacks(out var attacks))
                 return;
 

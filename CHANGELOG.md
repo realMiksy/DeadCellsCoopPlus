@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.38 - Sublevel exit dive-combat guard
+
+- Prevents stale dive-attack hits after returning from reward-room sublevels.
+- Drains queued remote combat packets before and after sublevel activation.
+- Adds a short post-room-change combat replay grace period.
+- Suppresses dive area-hit resolution in no-combat `T_*` transition/passages.
+- Temporarily removes invalid sprite targets from dive hit resolution in combat biomes.
+- Keeps the v0.8.36 transition, reward-door, MobSync, Party HUD, and menu-color fixes.
+
 # v0.8.37 Blue multiplayer menu label
 
 - Changes the main-menu **Play Multiplayer** text from white to a soft blue (`#7FD4FF`).

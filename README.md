@@ -1,4 +1,4 @@
-# DeadCellsCoopPlus — Stable Co-op v0.8.37
+# DeadCellsCoopPlus — Stable Co-op v0.8.38
 
 DeadCellsCoopPlus is a community-maintained fork of Vaiser’s original **Dead Cells Multiplayer Mod**, built with the **Dead Cells Core Modding API (DCCM)**.
 
@@ -78,13 +78,13 @@ Launch Dead Cells through DCCM. Configuration files are generated automatically 
 4. The second player joins through Steam, lobby code, or the host address.
 5. Start a run after both players are connected.
 
-Both players should use the same mod build. For v0.8.37, the game log should contain:
+Both players should use the same mod build. For v0.8.38, the game log should contain:
 
 ```text
-[NetMod] Source build: v0.8.37-blue-multiplayer-menu
+[NetMod] Source build: v0.8.38-sublevel-dive-combat-guard
 ```
 
-## Tested v0.8.37 paths
+## v0.8.38 regression test checklist
 
 - Prisoners’ Quarters to the passage area
 - Passage forge and mutation area

@@ -54,8 +54,11 @@ namespace DeadCellsMultiplayerMod
                 ? "sublevel-transition"
                 : reason;
 
+            var instance = Instance;
+            instance?.DrainRemoteCombatQueuesAfterLevelChange();
+            instance?.MarkDiveNetGuardAfterSpawnOrRoomChange();
             PrepareRemoteKingsForLevelTransition(s_subLevelRenderGuardReason);
-            Instance?.Logger.Information(
+            instance?.Logger.Information(
                 "[NetMod][SubLevelGuard] armed reason={Reason}",
                 s_subLevelRenderGuardReason);
         }
@@ -142,6 +145,8 @@ namespace DeadCellsMultiplayerMod
                 DisposeClientSlot(slot, clearIdentity: false);
 
             FinishRemoteKingLevelTransition();
+            DrainRemoteCombatQueuesAfterLevelChange();
+            MarkDiveNetGuardAfterSpawnOrRoomChange();
             SendCurrentRoomTarget(force: true);
             GameMenu.EnqueueMainThreadCoalesced("ghost:receive-coords", ReceiveGhostCoords);
 
