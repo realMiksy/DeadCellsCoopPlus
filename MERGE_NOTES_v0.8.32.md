@@ -7,7 +7,7 @@ This source intentionally uses the v0.8.2 rollback as the base.
 - `ModEntry/ModEntry.cs` behavior unchanged except for a build-identification log line.
 - Original level/door loading and ghost lifecycle.
 
-## Ported from later Claude builds
+## Ported from later stabilization builds
 - MobSync client culled-mob safety gates.
 - Deferred client mob death execution.
 - Ghost-mob despawn echo.

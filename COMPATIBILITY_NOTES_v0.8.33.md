@@ -12,7 +12,7 @@ Dead Cells received a PC stability patch on 15 June 2026. The current executable
 
 ## Preserved features
 
-- Claude MobSync fixes from v0.8.32
+- Advanced MobSync fixes from v0.8.32
 - New Party HUD from v0.8.32
 - v0.8.2 exit/door behavior
 - Steam/TCP hosting and joining

@@ -1,3 +1,5 @@
+# Changelog
+
 # v0.8.36 ZDoor sublevel render guard
 
 - Keeps the v0.8.35 KingSkin fix for normal biome transitions.
@@ -18,7 +20,7 @@
 - Repairs missing animation groups through `AnimManager.play("idle")` or `HSprite.set(...)` instead of writing an empty group name into every registered vanilla entity.
 - Hides and detaches all remote KingSkin render nodes immediately before a level transition, without destroying their gameplay entities during the fade.
 - Blocks remote skin/head recreation while the old level is transitioning so network callbacks cannot reattach a new KingSkin sprite during `loadMainLevel`.
-- Keeps the v0.8.33 vanilla `Level.init`, Claude MobSync fixes, new Party HUD, and stable v0.8.2 exit behavior.
+- Keeps the v0.8.33 vanilla `Level.init`, advanced MobSync fixes, new Party HUD, and stable v0.8.2 exit behavior.
 - Adds `[NetMod][KingSkinGuard]` diagnostics showing the animation group before/after repair and whether transition detachment ran.
 
 # v0.8.33 Dead Cells v35.9 vanilla Level.init compatibility
@@ -26,20 +28,17 @@
 - Stops replacing the complete game `Level.init` method.
 - Uses the current vanilla level initializer from the June 2026 game build.
 - Removes all active manual `Boot.tryRender()` calls from the level initialization path.
-- Keeps v0.8.32 Claude MobSync fixes, Party HUD, and v0.8.2 exit behavior.
+- Keeps v0.8.32 advanced MobSync fixes, Party HUD, and v0.8.2 exit behavior.
 - Adds compatibility logging for every initialized level.
 
-# v0.8.32 stable v0.8.2 transition base + Claude MobSync + safe new Party HUD
+# v0.8.32 stable v0.8.2 transition base + MobSync hardening + safe new Party HUD
 
 - Keeps v0.8.2 `LevelExitSync.cs`, level loading, ghost lifecycle, and ModEntry transition behavior unchanged.
-- Ports the later Claude MobSync fixes: trusted sync-id hit distance, client culled-mob wake/replay gates, deferred client deaths, ghost-mob despawn echo, teleport-skill replay blacklist, and duplicate-death protection.
+- Ports the later MobSync fixes: trusted sync-id hit distance, client culled-mob wake/replay gates, deferred client deaths, ghost-mob despawn echo, teleport-skill replay blacklist, and duplicate-death protection.
 - Includes the newer bronze/name/segmented-percent Party HUD appearance.
 - Rebuilds that HUD on a vanilla-managed outer `FlowBox` with an inner absolute-position panel, avoiding the loose root object that could survive HUD disposal.
 - Delays custom party-label creation for 1.5 seconds after HUD initialization so cached HP cannot create font-backed labels during `Game.loadMainLevel`.
 - The later mob-sync transition-quiesce code remains dormant because the stable v0.8.2 transition path never arms it.
-
-# Changelog
-
 
 ## v0.8.2 - Dynamic Contains build fix
 

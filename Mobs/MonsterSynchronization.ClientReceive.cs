@@ -1021,7 +1021,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
                 {
                     clientQueuedOldSkillMarkers.Remove(mob);
                     // Marker is only meaningful if the mob is still actively queued/charging this skill
-                    // (e.g. client AI fired it and host event would be a duplicate).
+                    // (e.g. client-side behavior fired it and the host event would be a duplicate).
                     // If the skill is not queued/charging, the marker is stale from our own replay
                     // and the incoming host event is a fresh attack — do not skip.
                     if (IsQueuedOrChargingOldSkillId(mob, incomingSkillId))
@@ -1704,7 +1704,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
         /// <summary>
         /// True when this mob is culled on THIS machine (far from the local hero, vanilla is not
         /// simulating it). Client-side, such mobs must not be pushed into vanilla simulation:
-        /// their AI state was never proximity-initialized, and forcing them awake makes vanilla
+        /// their behavior state was never proximity-initialized, and forcing them awake makes vanilla
         /// update null-deref a few frames later (Null access .cx while fighting far from the
         /// host). Returns false on any read failure so callers fall back to existing behavior.
         /// </summary>
@@ -1769,7 +1769,7 @@ namespace DeadCellsMultiplayerMod.Mobs.MobsSynchronization
 
             // The wake is required on the authoritative HOST (it must simulate mobs that remote
             // players are fighting). On clients it only served cosmetic hit/death replays; waking
-            // a locally culled mob there runs vanilla AI on uninitialized state and crashes.
+            // a locally culled mob there runs vanilla behavior logic on uninitialized state and crashes.
             if (!IsHost(GameMenu.NetRef) && IsMobCulledLocally(mob))
                 return;
 
