@@ -32,6 +32,7 @@ namespace DeadCellsMultiplayerMod
         private static bool _addMenuHookRegistered;
         private static bool _mainMenuButtonAdded;
         private static bool _addingMultiplayerButton;
+        private const int MultiplayerMainMenuTextColor = 0x7FD4FF; // soft blue
         private static WeakReference<TitleScreen?>? _titleScreenRef;
         private static string _mpIp = "127.0.0.1";
         private static int _mpPort = 1234;

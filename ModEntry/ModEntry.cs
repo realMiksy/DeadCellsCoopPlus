@@ -407,7 +407,7 @@ namespace DeadCellsMultiplayerMod
 
             s_hooksInstalled = true;
             entry.Logger.Information("\x1b[32m[[ModEntry] Initializing ModEntry...]\x1b[0m ");
-            entry.Logger.Information("[NetMod] Source build: v0.8.36-zdoor-sublevel-render-guard");
+            entry.Logger.Information("[NetMod] Source build: v0.8.37-blue-multiplayer-menu");
             Hook_Game.init += Hook_gameinit;
             Hook_Hero.wakeup += hook_hero_wakeup;
             Hook_Hero.onLevelChanged += hook_level_changed;

@@ -1,5 +1,11 @@
 # Changelog
 
+# v0.8.37 Blue multiplayer menu label
+
+- Changes the main-menu **Play Multiplayer** text from white to a soft blue (`#7FD4FF`).
+- Leaves all other menu entries and gameplay behavior unchanged.
+- Keeps every transition, KingSkin, ZDoor, MobSync, Steam, revive, and Party HUD fix from v0.8.36.
+
 # v0.8.36 ZDoor sublevel render guard
 
 - Keeps the v0.8.35 KingSkin fix for normal biome transitions.
